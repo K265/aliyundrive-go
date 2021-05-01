@@ -1,3 +1,4 @@
+// This is a go lang package written for https://www.aliyundrive.com/
 package drive
 
 import (
@@ -8,6 +9,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -142,7 +144,7 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 		}
 	}
 
-	if res.StatusCode != 200 {
+	if res.StatusCode >= 400 {
 		return errors.Errorf(`error request "%s", getting "%d"`, url, res.StatusCode)
 	}
 
@@ -209,9 +211,10 @@ func normalizePath(s string) string {
 
 func (drive *Drive) listNodes(ctx context.Context, node *Node) (*Nodes, error) {
 	url := "https://api.aliyundrive.com/v2/file/list"
-	data := map[string]string{
+	data := map[string]interface{}{
 		"drive_id":       drive.driveId,
 		"parent_file_id": node.NodeId,
+		"limit":          10000,
 	}
 	var nodes Nodes
 	err := drive.jsonRequest(ctx, "POST", url, &data, &nodes)
@@ -382,23 +385,12 @@ func (drive *Drive) Move(ctx context.Context, node *Node, parent *Node) error {
 	if parent == nil {
 		return errors.New("parent node is empty")
 	}
-	body := map[string]interface{}{
-		"requests": []map[string]interface{}{{
-			"body": map[string]string{
-				"drive_id":          drive.driveId,
-				"file_id":           node.NodeId,
-				"to_parent_file_id": parent.NodeId,
-			},
-			"headers": map[string]string{
-				"Content-Type": "application/json",
-			},
-			"id":     node.NodeId,
-			"method": "POST",
-			"url":    "/file/move",
-		}},
-		"resource": "file",
+	body := map[string]string{
+		"drive_id":          drive.driveId,
+		"file_id":           node.NodeId,
+		"to_parent_file_id": parent.NodeId,
 	}
-	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/batch", &body, nil)
+	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/move", &body, nil)
 	if err != nil {
 		return errors.Wrap(err, `error posting move request`)
 	}
@@ -414,22 +406,12 @@ func (drive *Drive) Remove(ctx context.Context, node *Node) error {
 		return err
 	}
 
-	body := map[string]interface{}{
-		"requests": []map[string]interface{}{{
-			"body": map[string]string{
-				"drive_id": drive.driveId,
-				"file_id":  node.NodeId,
-			},
-			"headers": map[string]string{
-				"Content-Type": "application/json",
-			},
-			"id":     node.NodeId,
-			"method": "POST",
-			"url":    "/recyclebin/trash",
-		}},
-		"resource": "file",
+	body := map[string]string{
+		"drive_id": drive.driveId,
+		"file_id":  node.NodeId,
 	}
-	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/batch", &body, nil)
+
+	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/recyclebin/trash", &body, nil)
 	if err != nil {
 		return errors.Wrap(err, `error posting remove request`)
 	}
@@ -477,9 +459,112 @@ func (drive *Drive) Open(ctx context.Context, node *Node, headers map[string]str
 }
 
 func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in io.Reader, overwrite bool) (*Node, error) {
-	return nil, nil
+	path = normalizePath(path)
+	i := strings.LastIndex(path, "/")
+	parent := path[:i]
+	name := path[i+1:]
+	_, err := drive.CreateFolder(ctx, parent)
+	if err != nil {
+		return nil, errors.New("error creating folder")
+	}
+
+	node, err := drive.Get(ctx, parent, FolderKind)
+	if err != nil {
+		return nil, findNodeError(err, parent)
+	}
+
+	var uploadResult UploadResult
+
+	preUpload := func() error {
+		body := map[string]interface{}{
+			"check_name_mode": "auto_rename",
+			"drive_id":        drive.driveId,
+			"name":            name,
+			"parent_file_id":  node.NodeId,
+			"part_info_list": []map[string]interface{}{
+				{
+					"part_number": 1,
+				},
+			},
+			"pre_hash": "",
+			"size":     size,
+			"type":     "file",
+		}
+		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/create_with_proof", &body, &uploadResult)
+		if err != nil {
+			return errors.Wrap(err, `error posting create file request`)
+		}
+
+		if len(uploadResult.PartInfoList) < 1 {
+			return errors.New(`error extracting uploadUrl'`)
+		}
+
+		return nil
+	}
+
+	err = preUpload()
+	if err != nil {
+		return nil, err
+	}
+
+	if name != uploadResult.FileName && overwrite {
+		node, err := drive.Get(ctx, parent+"/"+name, FileKind)
+		if err == nil {
+			err = drive.Remove(ctx, node)
+			if err == nil {
+				err = preUpload()
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	uploadUrl := uploadResult.PartInfoList[0].UploadUrl
+	{
+		req, err := http.NewRequestWithContext(ctx, "PUT", uploadUrl, in)
+		if err != nil {
+			return nil, errors.Wrap(err, "error creating upload request")
+		}
+		req.Header.Set("Content-Length", strconv.FormatInt(size, 10))
+		req.Header.Set("Content-Type", "")
+		ursp, err := drive.httpClient.Do(req)
+		if err != nil {
+			return nil, errors.Wrap(err, "error uploading file")
+		}
+		defer ursp.Body.Close()
+	}
+
+	var createdNode Node
+	{
+		body := map[string]interface{}{
+			"drive_id":  drive.driveId,
+			"file_id":   uploadResult.FileId,
+			"upload_id": uploadResult.UploadId,
+		}
+
+		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/complete", &body, &createdNode)
+		if err != nil {
+			return nil, errors.Wrap(err, `error posting upload complete request`)
+		}
+	}
+	return &createdNode, nil
 }
 
+// https://help.aliyun.com/document_detail/175927.html#pdscopyfilerequest
 func (drive *Drive) Copy(ctx context.Context, node *Node, parent *Node) error {
+	if parent == nil {
+		return errors.New("parent node is empty")
+	}
+	body := map[string]string{
+		"drive_id":          drive.driveId,
+		"file_id":           node.NodeId,
+		"to_parent_file_id": parent.NodeId,
+	}
+	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/copy", &body, nil)
+	if err != nil {
+		return errors.Wrap(err, `error posting move request`)
+	}
+
 	return nil
 }

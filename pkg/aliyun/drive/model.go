@@ -7,7 +7,8 @@ import (
 
 type Node struct {
 	DownloadUrl string `json:"download_url,omitempty"`
-	Type        string `json:"type"` // folder | file
+	Type        string `json:"type"`                   // folder | file
+	Hash        string `json:"content_hash,omitempty"` // sha1
 	Name        string `json:"name"`
 	NodeId      string `json:"file_id"`
 	ParentId    string `json:"parent_file_id,omitempty"`
@@ -52,4 +53,15 @@ type Token struct {
 type DownloadUrl struct {
 	Size int64  `json:"size"`
 	Url  string `json:"url"`
+}
+
+type PartInfo struct {
+	UploadUrl string `json:"upload_url"`
+}
+
+type UploadResult struct {
+	PartInfoList []PartInfo `json:"part_info_list"`
+	FileId       string     `json:"file_id"`
+	UploadId     string     `json:"upload_id"`
+	FileName     string     `json:"file_name"`
 }

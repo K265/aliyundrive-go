@@ -30,7 +30,7 @@ func setup(t *testing.T) context.Context {
 
 func TestList(t *testing.T) {
 	ctx := setup(t)
-	names, err := fs.List(ctx, "/media")
+	names, err := fs.List(ctx, "/test4")
 	require.NoError(t, err)
 	println(fmt.Sprintf("size: %v, %v", len(names), names))
 }
@@ -53,7 +53,7 @@ func TestRename(t *testing.T) {
 
 func TestMove(t *testing.T) {
 	ctx := setup(t)
-	node, err := fs.Get(ctx, "/test4/test3", FolderKind)
+	node, err := fs.Get(ctx, "/test3/test4", FolderKind)
 	require.NoError(t, err)
 	newNode, err := fs.Get(ctx, "/", FolderKind)
 	require.NoError(t, err)
@@ -82,4 +82,25 @@ func TestOpen(t *testing.T) {
 	fo.Write(data)
 	require.NoError(t, fd.Close())
 	require.NoError(t, fo.Close())
+}
+
+func TestCreateFile(t *testing.T) {
+	ctx := setup(t)
+	fd, err := os.Open("1.mp3")
+	require.NoError(t, err)
+	info, err := fd.Stat()
+	require.NoError(t, err)
+	_, err = fs.CreateFile(ctx, "/media/1.mp3", info.Size(), fd, true)
+	require.NoError(t, err)
+	defer fd.Close()
+}
+
+func TestCopy(t *testing.T) {
+	ctx := setup(t)
+	node, err := fs.Get(ctx, "/media/1.mp3", FileKind)
+	require.NoError(t, err)
+	parent, err := fs.Get(ctx, "/", FolderKind)
+	require.NoError(t, err)
+	err = fs.Copy(ctx, node, parent)
+	require.NoError(t, err)
 }
