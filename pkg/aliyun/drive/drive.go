@@ -4,11 +4,14 @@ package drive
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,7 +27,7 @@ type Fs interface {
 	Move(ctx context.Context, node *Node, parent *Node) error
 	Remove(ctx context.Context, node *Node) error
 	Open(ctx context.Context, node *Node, headers map[string]string) (io.ReadCloser, error)
-	CreateFile(ctx context.Context, path string, size int64, in io.Reader, overwrite bool) (*Node, error)
+	CreateFile(ctx context.Context, path string, size int64, in *os.File, overwrite bool) (*Node, error)
 	Copy(ctx context.Context, node *Node, parent *Node) error
 }
 
@@ -458,7 +461,33 @@ func (drive *Drive) Open(ctx context.Context, node *Node, headers map[string]str
 	return res.Body, nil
 }
 
-func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in io.Reader, overwrite bool) (*Node, error) {
+func CalcSha1(in *os.File) (*os.File, string, error) {
+	h := sha1.New()
+	_, err := io.Copy(h, in)
+	if err != nil {
+		return nil, "", errors.Wrap(err, "error calculating sha1")
+	}
+
+	_, _ = in.Seek(0, 0)
+	return in, fmt.Sprintf("%X", h.Sum(nil)), nil
+}
+
+func CalcProof(accessToken string, fileSize int64, in *os.File) (*os.File, string, error) {
+	start := CalcProofOffset(accessToken, fileSize)
+	sret, _ := in.Seek(start, 0)
+	if sret != start {
+		_, _ = in.Seek(0, 0)
+		return in, "", errors.Errorf("error seeking file to %d", start)
+	}
+
+	buf := make([]byte, 8)
+	_, _ = in.Read(buf)
+	proofCode := base64.StdEncoding.EncodeToString(buf)
+	_, _ = in.Seek(0, 0)
+	return in, proofCode, nil
+}
+
+func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in *os.File, overwrite bool) (*Node, error) {
 	path = normalizePath(path)
 	i := strings.LastIndex(path, "/")
 	parent := path[:i]
@@ -474,6 +503,8 @@ func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in 
 	}
 
 	var uploadResult UploadResult
+	in, contentHash, _ := CalcSha1(in)
+	in, proofCode, _ := CalcProof(drive.accessToken, size, in)
 
 	preUpload := func() error {
 		body := map[string]interface{}{
@@ -486,16 +517,19 @@ func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in 
 					"part_number": 1,
 				},
 			},
-			"pre_hash": "",
-			"size":     size,
-			"type":     "file",
+			"content_hash":      contentHash,
+			"content_hash_name": "sha1",
+			"proof_code":        proofCode,
+			"proof_version":     "v1",
+			"size":              size,
+			"type":              "file",
 		}
 		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/create_with_proof", &body, &uploadResult)
 		if err != nil {
 			return errors.Wrap(err, `error posting create file request`)
 		}
 
-		if len(uploadResult.PartInfoList) < 1 {
+		if !uploadResult.RapidUpload && len(uploadResult.PartInfoList) < 1 {
 			return errors.New(`error extracting uploadUrl'`)
 		}
 
@@ -505,6 +539,11 @@ func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in 
 	err = preUpload()
 	if err != nil {
 		return nil, err
+	}
+
+	if uploadResult.RapidUpload {
+		// rapid upload
+		return drive.Get(ctx, path, FileKind)
 	}
 
 	if name != uploadResult.FileName && overwrite {

@@ -1,12 +1,15 @@
 package drive
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -103,4 +106,62 @@ func TestCopy(t *testing.T) {
 	require.NoError(t, err)
 	err = fs.Copy(ctx, node, parent)
 	require.NoError(t, err)
+}
+
+func TestSha1(t *testing.T) {
+	fd, err := os.Open("1.mp3")
+	require.NoError(t, err)
+	rd, s, err := CalcSha1(fd)
+	assert.Equal(t, "462FD5A7D4B12EE8A88CF0881D811BD224DB79FE", s)
+	buf := make([]byte, 4)
+	_, _ = rd.Read(buf)
+	assert.Equal(t, []byte{0x49, 0x44, 0x33, 0x03}, buf)
+}
+
+func TestCalcProof(t *testing.T) {
+	fd, err := os.Open("1.mp3")
+	accessToken := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+	fileSize := int64(4087117)
+	require.NoError(t, err)
+	rd, proofCode, err := CalcProof(accessToken, fileSize, fd)
+	assert.Equal(t, "dj66UE3TEFM=", proofCode)
+	buf2 := make([]byte, 4)
+	_, _ = rd.Read(buf2)
+	assert.Equal(t, []byte{0x49, 0x44, 0x33, 0x03}, buf2)
+}
+
+func TestRapidUpload(t *testing.T) {
+	ctx := setup(t)
+	file, err := os.Open("../../../rapid_upload.txt")
+	require.NoError(t, err)
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		pair := scanner.Text()
+		if strings.HasPrefix(pair, "# ") {
+			continue
+		}
+
+		idx := strings.Index(pair, ";")
+		if idx < 0 {
+			continue
+		}
+
+		realPath := strings.TrimSpace(pair[:idx])
+		drivePath := strings.TrimSpace(pair[idx+1:])
+		if realPath == "" || drivePath == "" {
+			continue
+		}
+
+		fmt.Printf("Uploading %s to %s ...\n", realPath, drivePath)
+		fd, err := os.Open(realPath)
+		require.NoError(t, err)
+		info, err := fd.Stat()
+		require.NoError(t, err)
+		_, err = fs.CreateFile(ctx, drivePath, info.Size(), fd, true)
+		require.NoError(t, err)
+		fd.Close()
+	}
+
 }

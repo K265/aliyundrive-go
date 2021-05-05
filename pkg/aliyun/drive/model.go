@@ -60,8 +60,9 @@ type PartInfo struct {
 }
 
 type UploadResult struct {
-	PartInfoList []PartInfo `json:"part_info_list"`
+	PartInfoList []PartInfo `json:"part_info_list,omitempty"`
 	FileId       string     `json:"file_id"`
+	RapidUpload  bool       `json:"rapid_upload"`
 	UploadId     string     `json:"upload_id"`
 	FileName     string     `json:"file_name"`
 }
