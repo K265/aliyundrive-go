@@ -209,19 +209,31 @@ func normalizePath(s string) string {
 	return s
 }
 
-func (drive *Drive) listNodes(ctx context.Context, node *Node) (*Nodes, error) {
+func (drive *Drive) listNodes(ctx context.Context, node *Node) ([]Node, error) {
 	url := "https://api.aliyundrive.com/v2/file/list"
 	data := map[string]interface{}{
 		"drive_id":       drive.driveId,
 		"parent_file_id": node.NodeId,
-		"limit":          10000,
+		"limit":          200,
+		"marker":         "",
 	}
-	var nodes Nodes
-	err := drive.jsonRequest(ctx, "POST", url, &data, &nodes)
-	if err != nil {
-		return nil, errors.WithStack(err)
+	var nodes []Node
+	var lNodes *ListNodes
+	for true {
+		if lNodes != nil && lNodes.NextMarker == "" {
+			break
+		}
+
+		err := drive.jsonRequest(ctx, "POST", url, &data, &lNodes)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		nodes = append(nodes, lNodes.Items...)
+		data["marker"] = lNodes.NextMarker
 	}
-	return &nodes, nil
+
+	return nodes, nil
 }
 
 const FolderKind = "folder"
@@ -234,7 +246,7 @@ func (drive *Drive) findNameNode(ctx context.Context, node *Node, name string, k
 		return nil, errors.WithStack(err)
 	}
 
-	for _, d := range nodes.Items {
+	for _, d := range nodes {
 		if d.Name == name && (kind == AnyKind || d.Type == kind) {
 			return &d, nil
 		}
@@ -288,7 +300,7 @@ func (drive *Drive) List(ctx context.Context, path string) ([]Node, error) {
 		return nil, errors.Wrapf(err2, `error listing nodes of "%s"`, node)
 	}
 
-	return nodes.Items, nil
+	return nodes, nil
 }
 
 func (drive *Drive) createFolderInternal(ctx context.Context, parent string, name string) (*Node, error) {

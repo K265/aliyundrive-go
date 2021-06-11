@@ -38,8 +38,9 @@ func (n *Node) GetTime() (time.Time, error) {
 	return t, nil
 }
 
-type Nodes struct {
-	Items []Node `json:"items"`
+type ListNodes struct {
+	Items      []Node `json:"items"`
+	NextMarker string `json:"next_marker"`
 }
 
 type User struct {
