@@ -27,7 +27,7 @@ type Fs interface {
 	Move(ctx context.Context, node *Node, parent *Node) error
 	Remove(ctx context.Context, node *Node) error
 	Open(ctx context.Context, node *Node, headers map[string]string) (io.ReadCloser, error)
-	CreateFile(ctx context.Context, path string, size int64, in *os.File, overwrite bool) (*Node, error)
+	CreateFile(ctx context.Context, path string, size int64, in io.Reader, overwrite bool) (*Node, error)
 	Copy(ctx context.Context, node *Node, parent *Node) error
 }
 
@@ -499,7 +499,7 @@ func CalcProof(accessToken string, fileSize int64, in *os.File) (*os.File, strin
 	return in, proofCode, nil
 }
 
-func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in *os.File, overwrite bool) (*Node, error) {
+func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in io.Reader, overwrite bool) (*Node, error) {
 	path = normalizePath(path)
 	i := strings.LastIndex(path, "/")
 	parent := path[:i]
@@ -515,8 +515,13 @@ func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in 
 	}
 
 	var uploadResult UploadResult
-	in, contentHash, _ := CalcSha1(in)
-	in, proofCode, _ := CalcProof(drive.accessToken, size, in)
+	var contentHash, proofCode string
+
+	fin, ok := in.(*os.File)
+	if ok {
+		in, contentHash, _ = CalcSha1(fin)
+		in, proofCode, _ = CalcProof(drive.accessToken, size, fin)
+	}
 
 	preUpload := func() error {
 		body := map[string]interface{}{

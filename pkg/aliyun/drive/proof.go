@@ -134,7 +134,7 @@ func U(n []int32) string {
 	e := ""
 	a := 32 * len(n)
 	for t := 0; t < a; t += 8 {
-		e += string((uint32(n[t>>5]) >> (t % 32)) & 255)
+		e += string(rune((uint32(n[t>>5]) >> (t % 32)) & 255))
 	}
 	return e
 }
