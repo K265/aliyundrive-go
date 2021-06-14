@@ -28,6 +28,8 @@ type Fs interface {
 	Remove(ctx context.Context, node *Node) error
 	Open(ctx context.Context, node *Node, headers map[string]string) (io.ReadCloser, error)
 	CreateFile(ctx context.Context, path string, size int64, in io.Reader, overwrite bool) (*Node, error)
+	CalcProof(fileSize int64, in *os.File) (*os.File, string, error)
+	CreateFileWithProof(ctx context.Context, path string, size int64, in io.Reader, sha1Code string, proofCode string, overwrite bool) (*Node, error)
 	Copy(ctx context.Context, node *Node, parent *Node) error
 }
 
@@ -484,7 +486,7 @@ func CalcSha1(in *os.File) (*os.File, string, error) {
 	return in, fmt.Sprintf("%X", h.Sum(nil)), nil
 }
 
-func CalcProof(accessToken string, fileSize int64, in *os.File) (*os.File, string, error) {
+func calcProof(accessToken string, fileSize int64, in *os.File) (*os.File, string, error) {
 	start := CalcProofOffset(accessToken, fileSize)
 	sret, _ := in.Seek(start, 0)
 	if sret != start {
@@ -499,7 +501,24 @@ func CalcProof(accessToken string, fileSize int64, in *os.File) (*os.File, strin
 	return in, proofCode, nil
 }
 
+func (drive *Drive) CalcProof(fileSize int64, in *os.File) (*os.File, string, error) {
+	return calcProof(drive.accessToken, fileSize, in)
+}
+
 func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in io.Reader, overwrite bool) (*Node, error) {
+	sha1Code := ""
+	proofCode := ""
+
+	fin, ok := in.(*os.File)
+	if ok {
+		in, sha1Code, _ = CalcSha1(fin)
+		in, proofCode, _ = drive.CalcProof(size, fin)
+	}
+
+	return drive.CreateFileWithProof(ctx, path, size, in, sha1Code, proofCode, overwrite)
+}
+
+func (drive *Drive) CreateFileWithProof(ctx context.Context, path string, size int64, in io.Reader, sha1Code string, proofCode string, overwrite bool) (*Node, error) {
 	path = normalizePath(path)
 	i := strings.LastIndex(path, "/")
 	parent := path[:i]
@@ -515,13 +534,6 @@ func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in 
 	}
 
 	var uploadResult UploadResult
-	var contentHash, proofCode string
-
-	fin, ok := in.(*os.File)
-	if ok {
-		in, contentHash, _ = CalcSha1(fin)
-		in, proofCode, _ = CalcProof(drive.accessToken, size, fin)
-	}
 
 	preUpload := func() error {
 		body := map[string]interface{}{
@@ -534,7 +546,7 @@ func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in 
 					"part_number": 1,
 				},
 			},
-			"content_hash":      contentHash,
+			"content_hash":      sha1Code,
 			"content_hash_name": "sha1",
 			"proof_code":        proofCode,
 			"proof_version":     "v1",

@@ -123,7 +123,7 @@ func TestCalcProof(t *testing.T) {
 	accessToken := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
 	fileSize := int64(4087117)
 	require.NoError(t, err)
-	rd, proofCode, err := CalcProof(accessToken, fileSize, fd)
+	rd, proofCode, err := calcProof(accessToken, fileSize, fd)
 	assert.Equal(t, "dj66UE3TEFM=", proofCode)
 	buf2 := make([]byte, 4)
 	_, _ = rd.Read(buf2)
@@ -163,5 +163,4 @@ func TestRapidUpload(t *testing.T) {
 		require.NoError(t, err)
 		fd.Close()
 	}
-
 }
