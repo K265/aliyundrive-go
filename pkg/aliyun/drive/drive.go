@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 )
@@ -42,14 +43,18 @@ func (config Config) String() string {
 }
 
 type Drive struct {
-	config      Config
+	token
+	config     Config
+	driveId    string
+	rootId     string
+	rootNode   Node
+	httpClient *http.Client
+	mutex      sync.Mutex
+}
+
+type token struct {
 	accessToken string
-	driveId     string
-	rootId      string
-	rootNode    Node
-	folderCache FolderCache
-	httpClient  *http.Client
-	mutex       sync.Mutex
+	expireAt    int64
 }
 
 func (drive *Drive) String() string {
@@ -81,6 +86,7 @@ func (drive *Drive) refreshToken(ctx context.Context) error {
 	}
 	data := map[string]string{
 		"refresh_token": drive.config.RefreshToken,
+		"grant_type":    "refresh_token",
 	}
 
 	var body io.Reader
@@ -90,7 +96,7 @@ func (drive *Drive) refreshToken(ctx context.Context) error {
 	}
 
 	body = bytes.NewBuffer(b)
-	res, err := drive.request(ctx, "POST", "https://websv.aliyundrive.com/token/refresh", headers, body)
+	res, err := drive.request(ctx, "POST", "https://auth.aliyundrive.com/v2/account/token", headers, body)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -107,10 +113,19 @@ func (drive *Drive) refreshToken(ctx context.Context) error {
 	}
 
 	drive.accessToken = token.AccessToken
+	drive.expireAt = token.ExpiresIn + time.Now().Unix()
 	return nil
 }
 
 func (drive *Drive) jsonRequest(ctx context.Context, method, url string, requestModel interface{}, responseModel interface{}) error {
+
+	//Token expired, refresh access
+	if drive.expireAt < time.Now().Unix() {
+		err := drive.refreshToken(ctx)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	}
 	headers := map[string]string{
 		"content-type":  "application/json;charset=UTF-8",
 		"authorization": "Bearer " + drive.accessToken,
@@ -131,24 +146,6 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 	}
 	defer res.Body.Close()
 
-	if res.StatusCode == 401 {
-		// invalid access token, we need to refresh token here
-		err = drive.refreshToken(ctx)
-		headers["authorization"] = "Bearer " + drive.accessToken
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		res, err = drive.request(ctx, method, url, headers, bytes.NewBuffer(bodyBytes))
-		if err != nil {
-			return errors.WithStack(err)
-		}
-
-		defer res.Body.Close()
-		if res.StatusCode == 401 {
-			return errors.Errorf(`error request "%s", getting 401`, url)
-		}
-	}
-
 	if res.StatusCode >= 400 {
 		return errors.Errorf(`error request "%s", getting "%d"`, url, res.StatusCode)
 	}
@@ -168,16 +165,10 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 }
 
 func NewFs(ctx context.Context, config *Config) (Fs, error) {
-	cache, cerr := NewCache(256)
-	if cerr != nil {
-		return nil, errors.Wrap(cerr, "error creating cache")
-	}
-
 	client := &http.Client{}
 	drive := &Drive{
-		config:      *config,
-		httpClient:  client,
-		folderCache: cache,
+		config:     *config,
+		httpClient: client,
 	}
 
 	// get driveId
@@ -224,7 +215,7 @@ func (drive *Drive) listNodes(ctx context.Context, node *Node) ([]Node, error) {
 	}
 	var nodes []Node
 	var lNodes *ListNodes
-	for true {
+	for {
 		if lNodes != nil && lNodes.NextMarker == "" {
 			break
 		}
@@ -261,7 +252,6 @@ func (drive *Drive) findNameNode(ctx context.Context, node *Node, name string, k
 }
 
 // https://help.aliyun.com/document_detail/175927.html#pdsgetfilebypathrequest
-// TODO: read above doc, utilize '/v2/file/get_by_path', how to deal with file and folder with same name ?
 func (drive *Drive) Get(ctx context.Context, path string, kind string) (*Node, error) {
 	path = normalizePath(path)
 
@@ -269,24 +259,32 @@ func (drive *Drive) Get(ctx context.Context, path string, kind string) (*Node, e
 		return &drive.rootNode, nil
 	}
 
+	url := "https://api.aliyundrive.com/v2/file/get_by_path"
+	data := map[string]interface{}{
+		"drive_id":  drive.driveId,
+		"file_path": path,
+	}
+
+	var node *Node
+	err := drive.jsonRequest(ctx, "POST", url, &data, &node)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	if node.Type == kind {
+		return node, nil
+	}
+
 	i := strings.LastIndex(path, "/")
 	parent := path[:i]
 	name := path[i+1:]
-	if i == 0 {
-		return drive.findNameNode(ctx, &drive.rootNode, name, kind)
+
+	parentNode, err := drive.Get(ctx, parent, FolderKind)
+	if err != nil {
+		return nil, errors.WithStack(err)
 	}
 
-	node, ok := drive.folderCache.Get(parent)
-	if !ok {
-		_node, err := drive.Get(ctx, parent, FolderKind)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		node = _node
-		drive.folderCache.Put(parent, node)
-	}
-
-	return drive.findNameNode(ctx, node, name, kind)
+	return drive.findNameNode(ctx, parentNode, name, kind)
 }
 
 func findNodeError(err error, path string) error {
@@ -387,10 +385,6 @@ func (drive *Drive) Rename(ctx context.Context, node *Node, newName string) erro
 	if err != nil {
 		return errors.Wrap(err, `error posting rename request`)
 	}
-
-	if node.Type == FolderKind {
-		drive.folderCache.Clear()
-	}
 	return nil
 }
 
@@ -411,10 +405,6 @@ func (drive *Drive) Move(ctx context.Context, node *Node, parent *Node) error {
 	if err != nil {
 		return errors.Wrap(err, `error posting move request`)
 	}
-
-	if node.Type == FolderKind {
-		drive.folderCache.Clear()
-	}
 	return nil
 }
 
@@ -431,10 +421,6 @@ func (drive *Drive) Remove(ctx context.Context, node *Node) error {
 	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/recyclebin/trash", &body, nil)
 	if err != nil {
 		return errors.Wrap(err, `error posting remove request`)
-	}
-
-	if node.Type == FolderKind {
-		drive.folderCache.Clear()
 	}
 	return nil
 }
