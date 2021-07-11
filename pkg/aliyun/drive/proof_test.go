@@ -55,7 +55,8 @@ func TestG(t *testing.T) {
 }
 
 func TestCalcProofOffset(t *testing.T) {
-	accessToken := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+	accessToken := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0MjQyNDI0MjQyNDI0MjQyNDI0MjQyNDI0MjQyNDI0MiIsImN1c3RvbUpzb24iOiJ7XCJjbGllbnRJZFwiOlwiMjVkelgzdmJZcWt0Vnh5WFwiLFwiZG9tYWluSWRcIjpcImJqMjlcIixcInNjb3BlXCI6W1wiRFJJVkUuQUxMXCIsXCJTSEFSRS5BTExcIixcIkZJTEUuQUxMXCIsXCJVU0VSLkFMTFwiLFwiU1RPUkFHRS5BTExcIixcIlNUT1JBR0VGSUxFLkxJU1RcIixcIkJBVENIXCIsXCJPQVVUSC5BTExcIixcIklNQUdFLkFMTFwiLFwiSU5WSVRFLkFMTFwiLFwiQUNDT1VOVC5BTExcIl0sXCJyb2xlXCI6XCJ1c2VyXCIsXCJyZWZcIjpcImh0dHBzOi8vd3d3LmFsaXl1bmRyaXZlLmNvbS9cIn0iLCJleHAiOjE2MjAxMjAyNzUsImlhdCI6MTYyMDExMzAxNX0K.AlMk63QdYz8pDxbyg7CoxzJ_pMh9t1RO9e6Ri4yTLQyDghbpCuAxY4W43RHkShyYd4MmE7xNywT4IDxARKkCGkKqwCD1AOdTRLta_JVos242QPJbaEC1XEs2CdwjmID8uv4IiB1FmVb37_LVaVg-oUvgm94-zfdAocoxkUBavHE"
 	fileSize := int64(1477419708)
-	assert.True(t, 915335463 == CalcProofOffset(accessToken, fileSize))
+	offset := CalcProofOffset(accessToken, fileSize)
+	assert.True(t, 353042511 == offset)
 }
