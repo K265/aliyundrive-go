@@ -1,4 +1,4 @@
-// go lang implemetation for calculating proof_code
+// go lang implementation for calculating proof_code
 // see aliyun-drive-fe/aliyun-drive/2.0.12-web/web/bundle.js
 package drive
 
