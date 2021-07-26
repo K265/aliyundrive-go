@@ -164,7 +164,7 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 	return nil
 }
 
-func NewFs(ctx context.Context, config *Config) (Fs, error) {
+func NewFs(ctx context.Context, config *Config, isAlbum bool) (Fs, error) {
 	client := &http.Client{}
 	drive := &Drive{
 		config:     *config,
@@ -172,7 +172,17 @@ func NewFs(ctx context.Context, config *Config) (Fs, error) {
 	}
 
 	// get driveId
-	{
+	driveId := ""
+	if isAlbum {
+		var albumInfo AlbumInfo
+		data := map[string]string{}
+		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/adrive/v1/user/albums_info", &data, &albumInfo)
+		if err != nil {
+			return nil, errors.Wrap(err, "error getting driveId")
+		}
+
+		driveId = albumInfo.Data.DriveId
+	} else {
 		var user User
 		data := map[string]string{}
 		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/user/get", &data, &user)
@@ -180,13 +190,15 @@ func NewFs(ctx context.Context, config *Config) (Fs, error) {
 			return nil, errors.Wrap(err, "error getting driveId")
 		}
 
-		drive.driveId = user.DriveId
-		drive.rootId = "root"
-		drive.rootNode = Node{
-			NodeId: "root",
-			Type:   "folder",
-			Name:   "root",
-		}
+		driveId = user.DriveId
+	}
+
+	drive.driveId = driveId
+	drive.rootId = "root"
+	drive.rootNode = Node{
+		NodeId: "root",
+		Type:   "folder",
+		Name:   "root",
 	}
 
 	return drive, nil

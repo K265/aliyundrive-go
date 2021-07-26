@@ -47,6 +47,12 @@ type User struct {
 	DriveId string `json:"default_drive_id"`
 }
 
+type AlbumInfo struct {
+	Data struct {
+		DriveId string `json:"driveId"`
+	} `json:"data"`
+}
+
 type Token struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int64  `json:"expires_in"`

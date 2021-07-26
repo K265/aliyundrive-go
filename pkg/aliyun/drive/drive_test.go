@@ -26,14 +26,14 @@ func setup(t *testing.T) context.Context {
 	}
 
 	ctx := context.Background()
-	fs, err = NewFs(ctx, config)
+	fs, err = NewFs(ctx, config, true)
 	require.NoError(t, err)
 	return ctx
 }
 
 func TestList(t *testing.T) {
 	ctx := setup(t)
-	names, err := fs.List(ctx, "/test/1/2")
+	names, err := fs.List(ctx, "/")
 	require.NoError(t, err)
 	println(fmt.Sprintf("size: %v, %v", len(names), names))
 }
