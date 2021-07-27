@@ -2,6 +2,7 @@
 package drive
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha1"
@@ -20,6 +21,16 @@ import (
 	"github.com/pkg/errors"
 )
 
+const (
+	FolderKind = "folder"
+	FileKind   = "file"
+	AnyKind    = "any"
+)
+
+var (
+	errLivpUpload = errors.New("uploading .livp to album is not supported")
+)
+
 type Fs interface {
 	Get(ctx context.Context, path string, kind string) (*Node, error)
 	List(ctx context.Context, path string) ([]Node, error)
@@ -36,6 +47,7 @@ type Fs interface {
 
 type Config struct {
 	RefreshToken string
+	IsAlbum      bool
 }
 
 func (config Config) String() string {
@@ -92,7 +104,7 @@ func (drive *Drive) refreshToken(ctx context.Context) error {
 	var body io.Reader
 	b, err := json.Marshal(&data)
 	if err != nil {
-		return errors.New("error marshalling data")
+		return errors.Wrap(err, "error marshalling data")
 	}
 
 	body = bytes.NewBuffer(b)
@@ -135,7 +147,7 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 	if requestModel != nil {
 		b, err := json.Marshal(requestModel)
 		if err != nil {
-			return errors.New("error marshalling requestModel")
+			return errors.Wrap(err, "error marshalling requestModel")
 		}
 		bodyBytes = b
 	}
@@ -164,7 +176,7 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 	return nil
 }
 
-func NewFs(ctx context.Context, config *Config, isAlbum bool) (Fs, error) {
+func NewFs(ctx context.Context, config *Config) (Fs, error) {
 	client := &http.Client{}
 	drive := &Drive{
 		config:     *config,
@@ -173,7 +185,7 @@ func NewFs(ctx context.Context, config *Config, isAlbum bool) (Fs, error) {
 
 	// get driveId
 	driveId := ""
-	if isAlbum {
+	if config.IsAlbum {
 		var albumInfo AlbumInfo
 		data := map[string]string{}
 		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/adrive/v1/user/albums_info", &data, &albumInfo)
@@ -243,10 +255,6 @@ func (drive *Drive) listNodes(ctx context.Context, node *Node) ([]Node, error) {
 
 	return nodes, nil
 }
-
-const FolderKind = "folder"
-const FileKind = "file"
-const AnyKind = "any"
 
 func (drive *Drive) findNameNode(ctx context.Context, node *Node, name string, kind string) (*Node, error) {
 	nodes, err := drive.listNodes(ctx, node)
@@ -461,16 +469,48 @@ func (drive *Drive) Open(ctx context.Context, node *Node, headers map[string]str
 	}
 
 	url := downloadUrl.Url
-	if url == "" {
-		return nil, errors.Errorf(`error getting url of "%s"`, node)
+	if url != "" {
+		res, err := drive.request(ctx, "GET", url, headers, nil)
+		if err != nil {
+			return nil, errors.Wrapf(err, `error downloading "%s"`, url)
+		}
+
+		return res.Body, nil
 	}
 
-	res, err := drive.request(ctx, "GET", url, headers, nil)
-	if err != nil {
-		return nil, errors.Wrapf(err, `error downloading "%s"`, url)
+	// for iOS live photos (.livp)
+	streamsUrl := downloadUrl.StreamsUrl
+	if streamsUrl != nil {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		for t, u := range streamsUrl {
+			name := node.Name + "." + t
+			w, err := zw.Create(name)
+			if err != nil {
+				return nil, errors.Wrapf(err, "error creating entry %s in zip file", name)
+			}
+
+			res, err := drive.request(ctx, "GET", u, headers, nil)
+			if err != nil {
+				return nil, errors.Wrapf(err, `error downloading "%s"`, u)
+			}
+
+			if _, err := io.Copy(w, res.Body); err != nil {
+				return nil, errors.Wrapf(err, "Failed to write %s to zip", name)
+			}
+
+			_ = res.Body.Close()
+		}
+
+		err := zw.Close()
+		if err != nil {
+			return nil, errors.Wrapf(err, "error closing zip")
+		}
+
+		return io.NopCloser(&buf), nil
 	}
 
-	return res.Body, nil
+	return nil, errors.Errorf(`error getting url of "%s"`, node)
 }
 
 func CalcSha1(in *os.File) (*os.File, string, error) {
@@ -518,12 +558,16 @@ func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in 
 
 func (drive *Drive) CreateFileWithProof(ctx context.Context, path string, size int64, in io.Reader, sha1Code string, proofCode string, overwrite bool) (*Node, error) {
 	path = normalizePath(path)
+	if strings.HasSuffix(strings.ToLower(path), ".livp") {
+		return nil, errLivpUpload
+	}
+
 	i := strings.LastIndex(path, "/")
 	parent := path[:i]
 	name := path[i+1:]
 	_, err := drive.CreateFolder(ctx, parent)
 	if err != nil {
-		return nil, errors.New("error creating folder")
+		return nil, errors.Wrapf(err, "error creating folder %s", parent)
 	}
 
 	node, err := drive.Get(ctx, parent, FolderKind)

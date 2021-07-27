@@ -23,10 +23,11 @@ func setup(t *testing.T) context.Context {
 	}
 	config := &Config{
 		RefreshToken: token,
+		IsAlbum:      true,
 	}
 
 	ctx := context.Background()
-	fs, err = NewFs(ctx, config, true)
+	fs, err = NewFs(ctx, config)
 	require.NoError(t, err)
 	return ctx
 }
@@ -66,7 +67,7 @@ func TestMove(t *testing.T) {
 
 func TestRemove(t *testing.T) {
 	ctx := setup(t)
-	node, err := fs.Get(ctx, "/test4", FolderKind)
+	node, err := fs.Get(ctx, "/1.livp", FileKind)
 	require.NoError(t, err)
 	err = fs.Remove(ctx, node)
 	require.NoError(t, err)
@@ -74,13 +75,13 @@ func TestRemove(t *testing.T) {
 
 func TestOpen(t *testing.T) {
 	ctx := setup(t)
-	node, err := fs.Get(ctx, "/media/1.flac", FileKind)
+	node, err := fs.Get(ctx, "/IMG_1924.livp", FileKind)
 	require.NoError(t, err)
 	fd, err := fs.Open(ctx, node, map[string]string{})
 	require.NoError(t, err)
 	data, err := ioutil.ReadAll(fd)
 	require.NoError(t, err)
-	fo, err := os.Create("1.flac")
+	fo, err := os.Create("out.livp")
 	require.NoError(t, err)
 	fo.Write(data)
 	require.NoError(t, fd.Close())
@@ -89,11 +90,11 @@ func TestOpen(t *testing.T) {
 
 func TestCreateFile(t *testing.T) {
 	ctx := setup(t)
-	fd, err := os.Open("1.mp3")
+	fd, err := os.Open("out.livp")
 	require.NoError(t, err)
 	info, err := fd.Stat()
 	require.NoError(t, err)
-	_, err = fs.CreateFile(ctx, "/media/1.mp3", info.Size(), fd, true)
+	_, err = fs.CreateFile(ctx, "/out.livp", info.Size(), fd, true)
 	require.NoError(t, err)
 	defer fd.Close()
 }

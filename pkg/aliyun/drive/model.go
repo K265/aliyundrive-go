@@ -59,8 +59,9 @@ type Token struct {
 }
 
 type DownloadUrl struct {
-	Size int64  `json:"size"`
-	Url  string `json:"url"`
+	Size       int64             `json:"size"`
+	StreamsUrl map[string]string `json:"streams_url,omitempty"`
+	Url        string            `json:"url"`
 }
 
 type PartInfo struct {
