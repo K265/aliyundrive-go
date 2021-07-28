@@ -11,10 +11,18 @@ see <https://github.com/K265/aliyundrive-go/blob/main/pkg/aliyun/drive/drive_tes
 ## Features
 
 - [x] refresh token access
-
 - [x] list/create/rename/move/delete folder
-
 - [x] create/rename/move/open/delete file
+
+- [x] rapid upload
+
+- [x] album support
+
+## Thanks
+
+Thanks for your code contributions:
+
+[@SiHuan](https://github.com/sihuan)
 
 ## License
 
