@@ -36,13 +36,13 @@ type Fs interface {
 	List(ctx context.Context, path string) ([]Node, error)
 	CreateFolder(ctx context.Context, path string) (*Node, error)
 	Rename(ctx context.Context, node *Node, newName string) error
-	Move(ctx context.Context, node *Node, parent *Node) error
+	Move(ctx context.Context, node *Node, dstParent *Node, dstName string) error
 	Remove(ctx context.Context, node *Node) error
 	Open(ctx context.Context, node *Node, headers map[string]string) (io.ReadCloser, error)
 	CreateFile(ctx context.Context, path string, size int64, in io.Reader, overwrite bool) (*Node, error)
 	CalcProof(fileSize int64, in *os.File) (*os.File, string, error)
 	CreateFileWithProof(ctx context.Context, path string, size int64, in io.Reader, sha1Code string, proofCode string, overwrite bool) (*Node, error)
-	Copy(ctx context.Context, node *Node, parent *Node) error
+	Copy(ctx context.Context, node *Node, dstParent *Node, dstName string) error
 }
 
 type Config struct {
@@ -408,18 +408,19 @@ func (drive *Drive) Rename(ctx context.Context, node *Node, newName string) erro
 	return nil
 }
 
-func (drive *Drive) Move(ctx context.Context, node *Node, parent *Node) error {
+func (drive *Drive) Move(ctx context.Context, node *Node, dstParent *Node, dstName string) error {
 	if err := drive.checkRoot(node); err != nil {
 		return err
 	}
 
-	if parent == nil {
+	if dstParent == nil {
 		return errors.New("parent node is empty")
 	}
 	body := map[string]string{
 		"drive_id":          drive.driveId,
 		"file_id":           node.NodeId,
-		"to_parent_file_id": parent.NodeId,
+		"to_parent_file_id": dstParent.NodeId,
+		"new_name":          dstName,
 	}
 	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/move", &body, nil)
 	if err != nil {
@@ -662,18 +663,19 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, path string, size i
 }
 
 // https://help.aliyun.com/document_detail/175927.html#pdscopyfilerequest
-func (drive *Drive) Copy(ctx context.Context, node *Node, parent *Node) error {
-	if parent == nil {
+func (drive *Drive) Copy(ctx context.Context, node *Node, dstParent *Node, dstName string) error {
+	if dstParent == nil {
 		return errors.New("parent node is empty")
 	}
 	body := map[string]string{
 		"drive_id":          drive.driveId,
 		"file_id":           node.NodeId,
-		"to_parent_file_id": parent.NodeId,
+		"to_parent_file_id": dstParent.NodeId,
+		"new_name":          dstName,
 	}
 	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/copy", &body, nil)
 	if err != nil {
-		return errors.Wrap(err, `error posting move request`)
+		return errors.Wrap(err, `error posting copy request`)
 	}
 
 	return nil

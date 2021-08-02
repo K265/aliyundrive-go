@@ -43,9 +43,9 @@ func TestList(t *testing.T) {
 
 func TestCreateFolder(t *testing.T) {
 	ctx := setup(t)
-	_, err := fs.CreateFolder(ctx, "/")
+	_, err := fs.CreateFolder(ctx, "/test/1")
 	require.NoError(t, err)
-	_, err = fs.CreateFolder(ctx, "/test3/test4")
+	_, err = fs.CreateFolder(ctx, "/test/2")
 	require.NoError(t, err)
 }
 
@@ -59,11 +59,11 @@ func TestRename(t *testing.T) {
 
 func TestMove(t *testing.T) {
 	ctx := setup(t)
-	node, err := fs.Get(ctx, "/test3/test4", FolderKind)
+	node, err := fs.Get(ctx, "/test/1.txt", FileKind)
 	require.NoError(t, err)
 	newNode, err := fs.Get(ctx, "/", FolderKind)
 	require.NoError(t, err)
-	err = fs.Move(ctx, node, newNode)
+	err = fs.Move(ctx, node, newNode, "2.txt")
 	require.NoError(t, err)
 }
 
@@ -103,11 +103,11 @@ func TestCreateFile(t *testing.T) {
 
 func TestCopy(t *testing.T) {
 	ctx := setup(t)
-	node, err := fs.Get(ctx, "/media/1.mp3", FileKind)
+	node, err := fs.Get(ctx, "/1.txt", FileKind)
 	require.NoError(t, err)
 	parent, err := fs.Get(ctx, "/", FolderKind)
 	require.NoError(t, err)
-	err = fs.Copy(ctx, node, parent)
+	err = fs.Copy(ctx, node, parent, "2.txt")
 	require.NoError(t, err)
 }
 
