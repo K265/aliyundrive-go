@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -23,7 +24,8 @@ func setup(t *testing.T) context.Context {
 	}
 	config := &Config{
 		RefreshToken: token,
-		IsAlbum:      true,
+		IsAlbum:      false,
+		HttpClient:   &http.Client{},
 	}
 
 	ctx := context.Background()

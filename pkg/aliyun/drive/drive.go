@@ -48,6 +48,7 @@ type Fs interface {
 type Config struct {
 	RefreshToken string
 	IsAlbum      bool
+	HttpClient   *http.Client
 }
 
 func (config Config) String() string {
@@ -177,10 +178,9 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 }
 
 func NewFs(ctx context.Context, config *Config) (Fs, error) {
-	client := &http.Client{}
 	drive := &Drive{
 		config:     *config,
-		httpClient: client,
+		httpClient: config.HttpClient,
 	}
 
 	// get driveId
