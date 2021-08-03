@@ -563,6 +563,16 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, path string, size i
 		return nil, errLivpUpload
 	}
 
+	if overwrite {
+		node, err := drive.Get(ctx, path, FileKind)
+		if err == nil {
+			err = drive.Remove(ctx, node)
+			if err != nil {
+				return nil, errors.Wrapf(err, "error overwriting %s, failed to remove file", path)
+			}
+		}
+	}
+
 	i := strings.LastIndex(path, "/")
 	parent := path[:i]
 	name := path[i+1:]
@@ -616,19 +626,6 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, path string, size i
 	if uploadResult.RapidUpload {
 		// rapid upload
 		return drive.Get(ctx, path, FileKind)
-	}
-
-	if name != uploadResult.FileName && overwrite {
-		node, err := drive.Get(ctx, parent+"/"+name, FileKind)
-		if err == nil {
-			err = drive.Remove(ctx, node)
-			if err == nil {
-				err = preUpload()
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
 	}
 
 	uploadUrl := uploadResult.PartInfoList[0].UploadUrl

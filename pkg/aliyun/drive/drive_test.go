@@ -92,11 +92,11 @@ func TestOpen(t *testing.T) {
 
 func TestCreateFile(t *testing.T) {
 	ctx := setup(t)
-	fd, err := os.Open("out.livp")
+	fd, err := os.Open("1.mp3")
 	require.NoError(t, err)
 	info, err := fd.Stat()
 	require.NoError(t, err)
-	_, err = fs.CreateFile(ctx, "/out.livp", info.Size(), fd, true)
+	_, err = fs.CreateFile(ctx, "/1.mp3", info.Size(), fd, true)
 	require.NoError(t, err)
 	defer fd.Close()
 }
