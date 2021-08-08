@@ -289,6 +289,9 @@ func (drive *Drive) Get(ctx context.Context, fullPath string, kind string) (*Nod
 	var node *Node
 	err := drive.jsonRequest(ctx, "POST", url, &data, &node)
 	if err != nil {
+		// some folder with space suffix can not get by "get_by_path"
+		// server will return 404, need to get parent and list it.
+		// https://github.com/K265/aliyundrive-go/issues/3
 		if strings.Contains(err.Error(), `getting "404"`) {
 			goto findByParent
 		}
