@@ -33,16 +33,16 @@ var (
 )
 
 type Fs interface {
-	Get(ctx context.Context, path string, kind string) (*Node, error)
-	List(ctx context.Context, path string) ([]Node, error)
-	CreateFolder(ctx context.Context, path string) (*Node, error)
+	Get(ctx context.Context, fullPath string, kind string) (*Node, error)
+	List(ctx context.Context, fullPath string) ([]Node, error)
+	CreateFolder(ctx context.Context, fullPath string) (*Node, error)
 	Rename(ctx context.Context, node *Node, newName string) error
 	Move(ctx context.Context, node *Node, dstParent *Node, dstName string) error
 	Remove(ctx context.Context, node *Node) error
 	Open(ctx context.Context, node *Node, headers map[string]string) (io.ReadCloser, error)
-	CreateFile(ctx context.Context, path string, size int64, in io.Reader, overwrite bool) (*Node, error)
+	CreateFile(ctx context.Context, fullPath string, size int64, in io.Reader, overwrite bool) (*Node, error)
 	CalcProof(fileSize int64, in *os.File) (*os.File, string, error)
-	CreateFileWithProof(ctx context.Context, path string, size int64, in io.Reader, sha1Code string, proofCode string, overwrite bool) (*Node, error)
+	CreateFileWithProof(ctx context.Context, fullPath string, size int64, in io.Reader, sha1Code string, proofCode string, overwrite bool) (*Node, error)
 	Copy(ctx context.Context, node *Node, dstParent *Node, dstName string) error
 }
 
@@ -288,23 +288,18 @@ func (drive *Drive) Get(ctx context.Context, fullPath string, kind string) (*Nod
 
 	var node *Node
 	err := drive.jsonRequest(ctx, "POST", url, &data, &node)
-	if err != nil {
-		// some folder with space suffix can not get by "get_by_path"
-		// server will return 404, need to get parent and list it.
-		// https://github.com/K265/aliyundrive-go/issues/3
-		if strings.Contains(err.Error(), `got "404"`) {
-			goto findByParent
-		}
+	// paths with surrounding white spaces (like `/ test / test1 `)
+	// can't be found by `get_by_path`
+	// https://github.com/K265/aliyundrive-go/issues/3
+	if err != nil && !strings.Contains(err.Error(), `got "404"`) {
 		return nil, errors.WithStack(err)
 	}
 
-	if node.Type == kind {
+	if node != nil && node.Type == kind {
 		return node, nil
 	}
 
-findByParent:
 	parent, name := path.Split(fullPath)
-
 	parentNode, err := drive.Get(ctx, parent, FolderKind)
 	if err != nil {
 		return nil, errors.Wrapf(err, `failed to request "%s"`, url)
@@ -317,11 +312,11 @@ func findNodeError(err error, path string) error {
 	return errors.Wrapf(err, `failed to find node of "%s"`, path)
 }
 
-func (drive *Drive) List(ctx context.Context, path string) ([]Node, error) {
-	path = normalizePath(path)
-	node, err := drive.Get(ctx, path, FolderKind)
+func (drive *Drive) List(ctx context.Context, fullPath string) ([]Node, error) {
+	fullPath = normalizePath(fullPath)
+	node, err := drive.Get(ctx, fullPath, FolderKind)
 	if err != nil {
-		return nil, findNodeError(err, path)
+		return nil, findNodeError(err, fullPath)
 	}
 
 	nodes, err2 := drive.listNodes(ctx, node)
@@ -361,14 +356,14 @@ func (drive *Drive) createFolderInternal(ctx context.Context, parent string, nam
 	return &createdNode, nil
 }
 
-func (drive *Drive) CreateFolder(ctx context.Context, path string) (*Node, error) {
-	path = normalizePath(path)
-	pathLen := len(path)
+func (drive *Drive) CreateFolder(ctx context.Context, fullPath string) (*Node, error) {
+	fullPath = normalizePath(fullPath)
+	pathLen := len(fullPath)
 	i := 0
 	var createdNode *Node
 	for i < pathLen {
-		parent := path[:i]
-		remain := path[i+1:]
+		parent := fullPath[:i]
+		remain := fullPath[i+1:]
 		j := strings.Index(remain, "/")
 		if j < 0 {
 			// already at last position
@@ -550,7 +545,7 @@ func (drive *Drive) CalcProof(fileSize int64, in *os.File) (*os.File, string, er
 	return calcProof(drive.accessToken, fileSize, in)
 }
 
-func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in io.Reader, overwrite bool) (*Node, error) {
+func (drive *Drive) CreateFile(ctx context.Context, fullPath string, size int64, in io.Reader, overwrite bool) (*Node, error) {
 	sha1Code := ""
 	proofCode := ""
 
@@ -560,28 +555,28 @@ func (drive *Drive) CreateFile(ctx context.Context, path string, size int64, in 
 		in, proofCode, _ = drive.CalcProof(size, fin)
 	}
 
-	return drive.CreateFileWithProof(ctx, path, size, in, sha1Code, proofCode, overwrite)
+	return drive.CreateFileWithProof(ctx, fullPath, size, in, sha1Code, proofCode, overwrite)
 }
 
-func (drive *Drive) CreateFileWithProof(ctx context.Context, path string, size int64, in io.Reader, sha1Code string, proofCode string, overwrite bool) (*Node, error) {
-	path = normalizePath(path)
-	if strings.HasSuffix(strings.ToLower(path), ".livp") {
+func (drive *Drive) CreateFileWithProof(ctx context.Context, fullPath string, size int64, in io.Reader, sha1Code string, proofCode string, overwrite bool) (*Node, error) {
+	fullPath = normalizePath(fullPath)
+	if strings.HasSuffix(strings.ToLower(fullPath), ".livp") {
 		return nil, errLivpUpload
 	}
 
 	if overwrite {
-		node, err := drive.Get(ctx, path, FileKind)
+		node, err := drive.Get(ctx, fullPath, FileKind)
 		if err == nil {
 			err = drive.Remove(ctx, node)
 			if err != nil {
-				return nil, errors.Wrapf(err, `failed to overwrite "%s", can't remove file`, path)
+				return nil, errors.Wrapf(err, `failed to overwrite "%s", can't remove file`, fullPath)
 			}
 		}
 	}
 
-	i := strings.LastIndex(path, "/")
-	parent := path[:i]
-	name := path[i+1:]
+	i := strings.LastIndex(fullPath, "/")
+	parent := fullPath[:i]
+	name := fullPath[i+1:]
 	_, err := drive.CreateFolder(ctx, parent)
 	if err != nil {
 		return nil, errors.Wrapf(err, `failed to create folder "%s"`, parent)
@@ -631,7 +626,7 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, path string, size i
 
 	if uploadResult.RapidUpload {
 		// rapid upload
-		return drive.Get(ctx, path, FileKind)
+		return drive.Get(ctx, fullPath, FileKind)
 	}
 
 	uploadUrl := uploadResult.PartInfoList[0].UploadUrl

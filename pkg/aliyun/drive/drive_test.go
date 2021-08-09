@@ -34,6 +34,13 @@ func setup(t *testing.T) context.Context {
 	return ctx
 }
 
+func TestGet(t *testing.T) {
+	ctx := setup(t)
+	node, err := fs.Get(ctx, "/ test / test1 ", FolderKind)
+	require.NoError(t, err)
+	fmt.Printf("node: %s", node)
+}
+
 func TestList(t *testing.T) {
 	ctx := setup(t)
 	names, err := fs.List(ctx, "/")
