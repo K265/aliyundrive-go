@@ -105,7 +105,7 @@ func (drive *Drive) refreshToken(ctx context.Context) error {
 	var body io.Reader
 	b, err := json.Marshal(&data)
 	if err != nil {
-		return errors.Wrap(err, "error marshalling data")
+		return errors.WithStack(err)
 	}
 
 	body = bytes.NewBuffer(b)
@@ -118,11 +118,11 @@ func (drive *Drive) refreshToken(ctx context.Context) error {
 	var token Token
 	b, err = ioutil.ReadAll(res.Body)
 	if err != nil {
-		return errors.Wrap(err, `error reading res.Body`)
+		return errors.WithStack(err)
 	}
 	err = json.Unmarshal(b, &token)
 	if err != nil {
-		return errors.Wrapf(err, "error parsing responseModel, response: %s", string(b))
+		return errors.Wrapf(err, `failed to parse response "%s"`, string(b))
 	}
 
 	drive.accessToken = token.AccessToken
@@ -148,7 +148,7 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 	if requestModel != nil {
 		b, err := json.Marshal(requestModel)
 		if err != nil {
-			return errors.Wrap(err, "error marshalling requestModel")
+			return errors.WithStack(err)
 		}
 		bodyBytes = b
 	}
@@ -160,17 +160,17 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 	defer res.Body.Close()
 
 	if res.StatusCode >= 400 {
-		return errors.Errorf(`error request "%s", getting "%d"`, url, res.StatusCode)
+		return errors.Errorf(`failed to request "%s", got "%d"`, url, res.StatusCode)
 	}
 
 	if responseModel != nil {
 		b, err := ioutil.ReadAll(res.Body)
 		if err != nil {
-			return errors.Wrap(err, `error reading res.Body`)
+			return errors.WithStack(err)
 		}
 		err = json.Unmarshal(b, &responseModel)
 		if err != nil {
-			return errors.Wrapf(err, "error parsing responseModel, response: %s", string(b))
+			return errors.Wrapf(err, `failed to parse response "%s"`, string(b))
 		}
 	}
 
@@ -190,7 +190,7 @@ func NewFs(ctx context.Context, config *Config) (Fs, error) {
 		data := map[string]string{}
 		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/adrive/v1/user/albums_info", &data, &albumInfo)
 		if err != nil {
-			return nil, errors.Wrap(err, "error getting driveId")
+			return nil, errors.Wrap(err, "failed to get driveId")
 		}
 
 		driveId = albumInfo.Data.DriveId
@@ -199,7 +199,7 @@ func NewFs(ctx context.Context, config *Config) (Fs, error) {
 		data := map[string]string{}
 		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/user/get", &data, &user)
 		if err != nil {
-			return nil, errors.Wrap(err, "error getting driveId")
+			return nil, errors.Wrap(err, "failed to get driveId")
 		}
 
 		driveId = user.DriveId
@@ -301,14 +301,14 @@ func (drive *Drive) Get(ctx context.Context, path string, kind string) (*Node, e
 
 	parentNode, err := drive.Get(ctx, parent, FolderKind)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrapf(err, `failed to request "%s"`, url)
 	}
 
 	return drive.findNameNode(ctx, parentNode, name, kind)
 }
 
 func findNodeError(err error, path string) error {
-	return errors.Wrapf(err, `error finding node of "%s"`, path)
+	return errors.Wrapf(err, `failed to find node of "%s"`, path)
 }
 
 func (drive *Drive) List(ctx context.Context, path string) ([]Node, error) {
@@ -320,7 +320,7 @@ func (drive *Drive) List(ctx context.Context, path string) ([]Node, error) {
 
 	nodes, err2 := drive.listNodes(ctx, node)
 	if err2 != nil {
-		return nil, errors.Wrapf(err2, `error listing nodes of "%s"`, node)
+		return nil, errors.Wrapf(err2, `failed to list nodes of "%s"`, node)
 	}
 
 	return nodes, nil
@@ -349,7 +349,7 @@ func (drive *Drive) createFolderInternal(ctx context.Context, parent string, nam
 	var createdNode Node
 	err = drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/create_with_proof", &body, &createdNode)
 	if err != nil {
-		return nil, errors.Wrap(err, "error posting create folder request")
+		return nil, errors.Wrap(err, "failed to post create folder request")
 	}
 	createdNode.Name = name
 	return &createdNode, nil
@@ -403,7 +403,7 @@ func (drive *Drive) Rename(ctx context.Context, node *Node, newName string) erro
 	}
 	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/update", &data, nil)
 	if err != nil {
-		return errors.Wrap(err, `error posting rename request`)
+		return errors.Wrap(err, `failed to post rename request`)
 	}
 	return nil
 }
@@ -424,7 +424,7 @@ func (drive *Drive) Move(ctx context.Context, node *Node, dstParent *Node, dstNa
 	}
 	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/move", &body, nil)
 	if err != nil {
-		return errors.Wrap(err, `error posting move request`)
+		return errors.Wrap(err, `failed to post move request`)
 	}
 	return nil
 }
@@ -441,7 +441,7 @@ func (drive *Drive) Remove(ctx context.Context, node *Node) error {
 
 	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/recyclebin/trash", &body, nil)
 	if err != nil {
-		return errors.Wrap(err, `error posting remove request`)
+		return errors.Wrap(err, `failed to post remove request`)
 	}
 	return nil
 }
@@ -454,7 +454,7 @@ func (drive *Drive) getDownloadUrl(ctx context.Context, node *Node) (*DownloadUr
 	}
 	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/get_download_url", &data, &detail)
 	if err != nil {
-		return nil, errors.Wrapf(err, "error getting node detail, node: %s", node)
+		return nil, errors.Wrapf(err, `failed to get node detail of "%s"`, node)
 	}
 	return &detail, nil
 }
@@ -473,7 +473,7 @@ func (drive *Drive) Open(ctx context.Context, node *Node, headers map[string]str
 	if url != "" {
 		res, err := drive.request(ctx, "GET", url, headers, nil)
 		if err != nil {
-			return nil, errors.Wrapf(err, `error downloading "%s"`, url)
+			return nil, errors.Wrapf(err, `failed to download "%s"`, url)
 		}
 
 		return res.Body, nil
@@ -488,16 +488,16 @@ func (drive *Drive) Open(ctx context.Context, node *Node, headers map[string]str
 			name := node.Name + "." + t
 			w, err := zw.Create(name)
 			if err != nil {
-				return nil, errors.Wrapf(err, "error creating entry %s in zip file", name)
+				return nil, errors.Wrapf(err, `failed to creat entry "%s" in zip file`, name)
 			}
 
 			res, err := drive.request(ctx, "GET", u, headers, nil)
 			if err != nil {
-				return nil, errors.Wrapf(err, `error downloading "%s"`, u)
+				return nil, errors.Wrapf(err, `failed to download "%s"`, u)
 			}
 
 			if _, err := io.Copy(w, res.Body); err != nil {
-				return nil, errors.Wrapf(err, "Failed to write %s to zip", name)
+				return nil, errors.Wrapf(err, `failed to write "%s" to zip`, name)
 			}
 
 			_ = res.Body.Close()
@@ -505,20 +505,20 @@ func (drive *Drive) Open(ctx context.Context, node *Node, headers map[string]str
 
 		err := zw.Close()
 		if err != nil {
-			return nil, errors.Wrapf(err, "error closing zip")
+			return nil, errors.WithStack(err)
 		}
 
 		return io.NopCloser(&buf), nil
 	}
 
-	return nil, errors.Errorf(`error getting url of "%s"`, node)
+	return nil, errors.Errorf(`failed to open "%s"`, node)
 }
 
 func CalcSha1(in *os.File) (*os.File, string, error) {
 	h := sha1.New()
 	_, err := io.Copy(h, in)
 	if err != nil {
-		return nil, "", errors.Wrap(err, "error calculating sha1")
+		return nil, "", errors.Wrap(err, "failed to calculate sha1")
 	}
 
 	_, _ = in.Seek(0, 0)
@@ -530,7 +530,7 @@ func calcProof(accessToken string, fileSize int64, in *os.File) (*os.File, strin
 	sret, _ := in.Seek(start, 0)
 	if sret != start {
 		_, _ = in.Seek(0, 0)
-		return in, "", errors.Errorf("error seeking file to %d", start)
+		return in, "", errors.Errorf("failed to seek file to %d", start)
 	}
 
 	buf := make([]byte, 8)
@@ -568,7 +568,7 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, path string, size i
 		if err == nil {
 			err = drive.Remove(ctx, node)
 			if err != nil {
-				return nil, errors.Wrapf(err, "error overwriting %s, failed to remove file", path)
+				return nil, errors.Wrapf(err, `failed to overwrite "%s", can't remove file`, path)
 			}
 		}
 	}
@@ -578,7 +578,7 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, path string, size i
 	name := path[i+1:]
 	_, err := drive.CreateFolder(ctx, parent)
 	if err != nil {
-		return nil, errors.Wrapf(err, "error creating folder %s", parent)
+		return nil, errors.Wrapf(err, `failed to create folder "%s"`, parent)
 	}
 
 	node, err := drive.Get(ctx, parent, FolderKind)
@@ -608,11 +608,11 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, path string, size i
 		}
 		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/create_with_proof", &body, &uploadResult)
 		if err != nil {
-			return errors.Wrap(err, `error posting create file request`)
+			return errors.Wrap(err, `failed to post create file request`)
 		}
 
 		if !uploadResult.RapidUpload && len(uploadResult.PartInfoList) < 1 {
-			return errors.New(`error extracting uploadUrl'`)
+			return errors.New(`failed to extract uploadUrl`)
 		}
 
 		return nil
@@ -632,13 +632,13 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, path string, size i
 	{
 		req, err := http.NewRequestWithContext(ctx, "PUT", uploadUrl, in)
 		if err != nil {
-			return nil, errors.Wrap(err, "error creating upload request")
+			return nil, errors.Wrap(err, "failed to create upload request")
 		}
 		req.Header.Set("Content-Length", strconv.FormatInt(size, 10))
 		req.Header.Set("Content-Type", "")
 		ursp, err := drive.httpClient.Do(req)
 		if err != nil {
-			return nil, errors.Wrap(err, "error uploading file")
+			return nil, errors.Wrap(err, "failed to upload file")
 		}
 		defer ursp.Body.Close()
 	}
@@ -653,7 +653,7 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, path string, size i
 
 		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/complete", &body, &createdNode)
 		if err != nil {
-			return nil, errors.Wrap(err, `error posting upload complete request`)
+			return nil, errors.Wrap(err, `failed to post upload complete request`)
 		}
 	}
 	return &createdNode, nil
@@ -672,7 +672,7 @@ func (drive *Drive) Copy(ctx context.Context, node *Node, dstParent *Node, dstNa
 	}
 	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/copy", &body, nil)
 	if err != nil {
-		return errors.Wrap(err, `error posting copy request`)
+		return errors.Wrap(err, `failed to post copy request`)
 	}
 
 	return nil
