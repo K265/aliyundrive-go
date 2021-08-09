@@ -160,6 +160,10 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 	}
 	defer res.Body.Close()
 
+	if res.StatusCode == http.StatusNotFound {
+		return errors.Wrapf(os.ErrNotExist, `failed to request "%s", got "%d"`, url, res.StatusCode)
+	}
+
 	if res.StatusCode >= 400 {
 		return errors.Errorf(`failed to request "%s", got "%d"`, url, res.StatusCode)
 	}
@@ -269,7 +273,7 @@ func (drive *Drive) findNameNode(ctx context.Context, node *Node, name string, k
 		}
 	}
 
-	return nil, errors.Errorf(`can't find "%s", kind: "%s" under "%s"`, name, kind, node)
+	return nil, errors.Wrapf(os.ErrNotExist, `can't find "%s", kind: "%s" under "%s"`, name, kind, node)
 }
 
 // https://help.aliyun.com/document_detail/175927.html#pdsgetfilebypathrequest
