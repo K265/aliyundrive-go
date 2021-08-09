@@ -13,6 +13,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -272,22 +273,28 @@ func (drive *Drive) findNameNode(ctx context.Context, node *Node, name string, k
 }
 
 // https://help.aliyun.com/document_detail/175927.html#pdsgetfilebypathrequest
-func (drive *Drive) Get(ctx context.Context, path string, kind string) (*Node, error) {
-	path = normalizePath(path)
+func (drive *Drive) Get(ctx context.Context, fullPath string, kind string) (*Node, error) {
+	fullPath = normalizePath(fullPath)
 
-	if path == "/" || path == "" {
+	if fullPath == "/" || fullPath == "" {
 		return &drive.rootNode, nil
 	}
 
 	url := "https://api.aliyundrive.com/v2/file/get_by_path"
 	data := map[string]interface{}{
 		"drive_id":  drive.driveId,
-		"file_path": path,
+		"file_path": fullPath,
 	}
 
 	var node *Node
 	err := drive.jsonRequest(ctx, "POST", url, &data, &node)
 	if err != nil {
+		// some folder with space suffix can not get by "get_by_path"
+		// server will return 404, need to get parent and list it.
+		// https://github.com/K265/aliyundrive-go/issues/3
+		if strings.Contains(err.Error(), `getting "404"`) {
+			goto findByParent
+		}
 		return nil, errors.WithStack(err)
 	}
 
@@ -295,9 +302,8 @@ func (drive *Drive) Get(ctx context.Context, path string, kind string) (*Node, e
 		return node, nil
 	}
 
-	i := strings.LastIndex(path, "/")
-	parent := path[:i]
-	name := path[i+1:]
+findByParent:
+	parent, name := path.Split(fullPath)
 
 	parentNode, err := drive.Get(ctx, parent, FolderKind)
 	if err != nil {
