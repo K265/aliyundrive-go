@@ -1,4 +1,4 @@
-// This is a go lang package written for https://www.aliyundrive.com/
+// This is a golang package written for https://www.aliyundrive.com/
 package drive
 
 import (
@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +25,25 @@ const (
 	FolderKind = "folder"
 	FileKind   = "file"
 	AnyKind    = "any"
+)
+
+const (
+	apiRefreshToken        = "https://auth.aliyundrive.com/v2/account/token"
+	apiList                = "https://api.aliyundrive.com/v2/file/list"
+	apiCreateFileWithProof = "https://api.aliyundrive.com/v2/file/create_with_proof"
+	apiCompleteUpload      = "https://api.aliyundrive.com/v2/file/complete"
+	apiFileGet             = "https://api.aliyundrive.com/v2/file/get"
+	apiFileGetByPath       = "https://api.aliyundrive.com/v2/file/get_by_path"
+	apiCreateWithFolder    = "https://api.aliyundrive.com/adrive/v2/file/createWithFolders"
+	apiTrash               = "https://api.aliyundrive.com/v2/recyclebin/trash"
+	apiDelete              = "https://api.aliyundrive.com/v3/file/delete"
+	apiBatch               = "https://api.aliyundrive.com/v2/batch"
+
+	fakeUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.77 Safari/537.36"
+)
+
+const (
+	MaxPartSize = 1024 * 1024 * 1024 // 1G
 )
 
 var (
@@ -82,6 +100,7 @@ func (drive *Drive) request(ctx context.Context, method, url string, headers map
 	}
 
 	req.Header.Set("Referer", "https://www.aliyundrive.com/")
+	req.Header.Set("User-Agent", fakeUA)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -110,7 +129,7 @@ func (drive *Drive) refreshToken(ctx context.Context) error {
 	}
 
 	body = bytes.NewBuffer(b)
-	res, err := drive.request(ctx, "POST", "https://auth.aliyundrive.com/v2/account/token", headers, body)
+	res, err := drive.request(ctx, "POST", apiRefreshToken, headers, body)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -131,8 +150,7 @@ func (drive *Drive) refreshToken(ctx context.Context) error {
 	return nil
 }
 
-func (drive *Drive) jsonRequest(ctx context.Context, method, url string, requestModel interface{}, responseModel interface{}) error {
-
+func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request interface{}, response interface{}) error {
 	// Token expired, refresh access
 	if drive.expireAt < time.Now().Unix() {
 		err := drive.refreshToken(ctx)
@@ -146,8 +164,8 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 	}
 
 	var bodyBytes []byte
-	if requestModel != nil {
-		b, err := json.Marshal(requestModel)
+	if request != nil {
+		b, err := json.Marshal(request)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -168,12 +186,12 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 		return errors.Errorf(`failed to request "%s", got "%d"`, url, res.StatusCode)
 	}
 
-	if responseModel != nil {
+	if response != nil {
 		b, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		err = json.Unmarshal(b, &responseModel)
+		err = json.Unmarshal(b, &response)
 		if err != nil {
 			return errors.Wrapf(err, `failed to parse response "%s"`, string(b))
 		}
@@ -235,7 +253,6 @@ func normalizePath(s string) string {
 }
 
 func (drive *Drive) listNodes(ctx context.Context, node *Node) ([]Node, error) {
-	url := "https://api.aliyundrive.com/v2/file/list"
 	data := map[string]interface{}{
 		"drive_id":       drive.driveId,
 		"parent_file_id": node.NodeId,
@@ -249,7 +266,7 @@ func (drive *Drive) listNodes(ctx context.Context, node *Node) ([]Node, error) {
 			break
 		}
 
-		err := drive.jsonRequest(ctx, "POST", url, &data, &lNodes)
+		err := drive.jsonRequest(ctx, "POST", apiList, &data, &lNodes)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -284,14 +301,13 @@ func (drive *Drive) Get(ctx context.Context, fullPath string, kind string) (*Nod
 		return &drive.rootNode, nil
 	}
 
-	url := "https://api.aliyundrive.com/v2/file/get_by_path"
 	data := map[string]interface{}{
 		"drive_id":  drive.driveId,
 		"file_path": fullPath,
 	}
 
 	var node *Node
-	err := drive.jsonRequest(ctx, "POST", url, &data, &node)
+	err := drive.jsonRequest(ctx, "POST", apiFileGetByPath, &data, &node)
 	// paths with surrounding white spaces (like `/ test / test1 `)
 	// can't be found by `get_by_path`
 	// https://github.com/K265/aliyundrive-go/issues/3
@@ -306,7 +322,7 @@ func (drive *Drive) Get(ctx context.Context, fullPath string, kind string) (*Nod
 	parent, name := path.Split(fullPath)
 	parentNode, err := drive.Get(ctx, parent, FolderKind)
 	if err != nil {
-		return nil, errors.Wrapf(err, `failed to request "%s"`, url)
+		return nil, errors.Wrapf(err, `failed to request "%s"`, apiFileGetByPath)
 	}
 
 	return drive.findNameNode(ctx, parentNode, name, kind)
@@ -352,7 +368,7 @@ func (drive *Drive) createFolderInternal(ctx context.Context, parent string, nam
 		"type":            "folder",
 	}
 	var createdNode Node
-	err = drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/create_with_proof", &body, &createdNode)
+	err = drive.jsonRequest(ctx, "POST", apiCreateFileWithProof, &body, &createdNode)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to post create folder request")
 	}
@@ -444,7 +460,7 @@ func (drive *Drive) Remove(ctx context.Context, node *Node) error {
 		"file_id":  node.NodeId,
 	}
 
-	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/recyclebin/trash", &body, nil)
+	err := drive.jsonRequest(ctx, "POST", apiTrash, &body, nil)
 	if err != nil {
 		return errors.Wrap(err, `failed to post remove request`)
 	}
@@ -562,6 +578,21 @@ func (drive *Drive) CreateFile(ctx context.Context, fullPath string, size int64,
 	return drive.CreateFileWithProof(ctx, fullPath, size, in, sha1Code, proofCode, overwrite)
 }
 
+func makePartInfoList(size int64) []*PartInfo {
+	partInfoNum := 0
+	if size%MaxPartSize > 0 {
+		partInfoNum++
+	}
+	partInfoNum += int(size / MaxPartSize)
+	list := make([]*PartInfo, partInfoNum)
+	for i := 0; i < partInfoNum; i++ {
+		list[i] = &PartInfo{
+			PartNumber: i + 1,
+		}
+	}
+	return list
+}
+
 func (drive *Drive) CreateFileWithProof(ctx context.Context, fullPath string, size int64, in io.Reader, sha1Code string, proofCode string, overwrite bool) (*Node, error) {
 	fullPath = normalizePath(fullPath)
 	if strings.HasSuffix(strings.ToLower(fullPath), ".livp") {
@@ -591,72 +622,60 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, fullPath string, si
 		return nil, findNodeError(err, parent)
 	}
 
-	var uploadResult UploadResult
+	var proofResult ProofResult
 
-	preUpload := func() error {
-		body := map[string]interface{}{
-			"check_name_mode": "auto_rename",
-			"drive_id":        drive.driveId,
-			"name":            name,
-			"parent_file_id":  node.NodeId,
-			"part_info_list": []map[string]interface{}{
-				{
-					"part_number": 1,
-				},
-			},
-			"content_hash":      sha1Code,
-			"content_hash_name": "sha1",
-			"proof_code":        proofCode,
-			"proof_version":     "v1",
-			"size":              size,
-			"type":              "file",
-		}
-		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/create_with_proof", &body, &uploadResult)
-		if err != nil {
-			return errors.Wrap(err, `failed to post create file request`)
-		}
-
-		if !uploadResult.RapidUpload && len(uploadResult.PartInfoList) < 1 {
-			return errors.New(`failed to extract uploadUrl`)
-		}
-
-		return nil
+	proof := &FileProof{
+		DriveID:         drive.driveId,
+		PartInfoList:    makePartInfoList(size),
+		ParentFileID:    node.NodeId,
+		Name:            name,
+		Type:            "file",
+		CheckNameMode:   "auto_rename",
+		Size:            size,
+		ContentHash:     sha1Code,
+		ContentHashName: "sha1",
+		ProofCode:       proofCode,
+		ProofVersion:    "v1",
 	}
 
-	err = preUpload()
-	if err != nil {
-		return nil, err
-	}
-
-	if uploadResult.RapidUpload {
-		// rapid upload
-		return drive.Get(ctx, fullPath, FileKind)
-	}
-
-	uploadUrl := uploadResult.PartInfoList[0].UploadUrl
 	{
-		req, err := http.NewRequestWithContext(ctx, "PUT", uploadUrl, in)
+		err = drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/create_with_proof", proof, &proofResult)
+		if err != nil {
+			return nil, errors.Wrap(err, `failed to post create file request`)
+		}
+
+		if proofResult.RapidUpload {
+			// rapid upload
+			return drive.Get(ctx, fullPath, FileKind)
+		}
+
+		if len(proofResult.PartInfoList) < 1 {
+			return nil, errors.New(`failed to extract uploadUrl`)
+		}
+	}
+
+	for _, part := range proofResult.PartInfoList {
+		partReader := io.LimitReader(in, MaxPartSize)
+		req, err := http.NewRequestWithContext(ctx, "PUT", part.UploadUrl, partReader)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to create upload request")
 		}
-		req.Header.Set("Content-Length", strconv.FormatInt(size, 10))
-		req.Header.Set("Content-Type", "")
-		ursp, err := drive.httpClient.Do(req)
+		resp, err := drive.httpClient.Do(req)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to upload file")
 		}
-		defer ursp.Body.Close()
+		resp.Body.Close()
 	}
 
 	var createdNode Node
 	{
 		body := map[string]interface{}{
 			"drive_id":  drive.driveId,
-			"file_id":   uploadResult.FileId,
-			"upload_id": uploadResult.UploadId,
+			"file_id":   proofResult.FileId,
+			"upload_id": proofResult.UploadId,
 		}
 
-		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/complete", &body, &createdNode)
+		err := drive.jsonRequest(ctx, "POST", apiCompleteUpload, &body, &createdNode)
 		if err != nil {
 			return nil, errors.Wrap(err, `failed to post upload complete request`)
 		}
