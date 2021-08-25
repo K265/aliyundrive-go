@@ -64,11 +64,26 @@ type DownloadUrl struct {
 	Url        string            `json:"url"`
 }
 
-type PartInfo struct {
-	UploadUrl string `json:"upload_url"`
+type FileProof struct {
+	DriveID         string      `json:"drive_id"`
+	PartInfoList    []*PartInfo `json:"part_info_list"`
+	ParentFileID    string      `json:"parent_file_id"`
+	Name            string      `json:"name"`
+	Type            string      `json:"type"`
+	CheckNameMode   string      `json:"check_name_mode"`
+	Size            int64       `json:"size"`
+	ContentHash     string      `json:"content_hash"`
+	ContentHashName string      `json:"content_hash_name"`
+	ProofCode       string      `json:"proof_code"`
+	ProofVersion    string      `json:"proof_version"`
 }
 
-type UploadResult struct {
+type PartInfo struct {
+	PartNumber int    `json:"part_number"`
+	UploadUrl  string `json:"upload_url"`
+}
+
+type ProofResult struct {
 	PartInfoList []PartInfo `json:"part_info_list,omitempty"`
 	FileId       string     `json:"file_id"`
 	RapidUpload  bool       `json:"rapid_upload"`
