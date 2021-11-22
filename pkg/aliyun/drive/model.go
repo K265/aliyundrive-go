@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+type NodeId struct {
+	NodeId string `json:"file_id"`
+}
+
 type Node struct {
 	DownloadUrl string `json:"download_url,omitempty"`
 	Type        string `json:"type"`                   // folder | file

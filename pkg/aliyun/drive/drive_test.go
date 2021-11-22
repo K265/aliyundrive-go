@@ -1,14 +1,13 @@
 package drive
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"os"
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,87 +33,41 @@ func setup(t *testing.T) context.Context {
 	return ctx
 }
 
-func TestGet(t *testing.T) {
-	ctx := setup(t)
-	node, err := fs.Get(ctx, "/ test / test1 ", FolderKind)
-	require.NoError(t, err)
-	fmt.Printf("node: %s", node)
+func sleep() {
+	time.Sleep(time.Millisecond * 200)
 }
 
-func TestList(t *testing.T) {
+func TestIntegration(t *testing.T) {
 	ctx := setup(t)
-	names, err := fs.List(ctx, "/")
+	testRootNodeId, err := fs.CreateFolderRecursively(ctx, "/")
+	sleep()
 	require.NoError(t, err)
-	println(fmt.Sprintf("size: %v, %v", len(names), names))
-}
-
-func TestCreateFolder(t *testing.T) {
-	ctx := setup(t)
-	_, err := fs.CreateFolder(ctx, "/test/1")
+	childNodeId, err := fs.CreateFolder(ctx, testRootNodeId, "测试")
+	sleep()
 	require.NoError(t, err)
-	_, err = fs.CreateFolder(ctx, "/test/2")
-	require.NoError(t, err)
-}
-
-func TestRename(t *testing.T) {
-	ctx := setup(t)
-	node, err := fs.Get(ctx, "/test2222", FolderKind)
-	require.NoError(t, err)
-	err = fs.Rename(ctx, node, "test4")
-	require.NoError(t, err)
-}
-
-func TestMove(t *testing.T) {
-	ctx := setup(t)
-	node, err := fs.Get(ctx, "/test/1.txt", FileKind)
-	require.NoError(t, err)
-	newNode, err := fs.Get(ctx, "/", FolderKind)
-	require.NoError(t, err)
-	err = fs.Move(ctx, node, newNode, "2.txt")
-	require.NoError(t, err)
-}
-
-func TestRemove(t *testing.T) {
-	ctx := setup(t)
-	node, err := fs.Get(ctx, "/1.livp", FileKind)
-	require.NoError(t, err)
-	err = fs.Remove(ctx, node)
-	require.NoError(t, err)
-}
-
-func TestOpen(t *testing.T) {
-	ctx := setup(t)
-	node, err := fs.Get(ctx, "/IMG_1924.livp", FileKind)
-	require.NoError(t, err)
-	fd, err := fs.Open(ctx, node, map[string]string{})
-	require.NoError(t, err)
-	data, err := ioutil.ReadAll(fd)
-	require.NoError(t, err)
-	fo, err := os.Create("out.livp")
-	require.NoError(t, err)
-	fo.Write(data)
-	require.NoError(t, fd.Close())
-	require.NoError(t, fo.Close())
-}
-
-func TestCreateFile(t *testing.T) {
-	ctx := setup(t)
-	fd, err := os.Open("1.mp3")
-	require.NoError(t, err)
-	info, err := fd.Stat()
-	require.NoError(t, err)
-	_, err = fs.CreateFile(ctx, "/1.mp3", info.Size(), fd, true)
-	require.NoError(t, err)
-	defer fd.Close()
-}
-
-func TestCopy(t *testing.T) {
-	ctx := setup(t)
-	node, err := fs.Get(ctx, "/1.txt", FileKind)
-	require.NoError(t, err)
-	parent, err := fs.Get(ctx, "/", FolderKind)
-	require.NoError(t, err)
-	err = fs.Copy(ctx, node, parent, "2.txt")
+	{
+		fd, err := os.Open("../../../assets/rapid_upload.js")
+		require.NoError(t, err)
+		info, err := fd.Stat()
+		require.NoError(t, err)
+		nodeId, err := fs.CreateFile(ctx, childNodeId, "rapid_upload.js", info.Size(), fd)
+		require.NoError(t, err)
+		sleep()
+		node, err := fs.Get(ctx, nodeId)
+		require.NoError(t, err)
+		sleep()
+		fmt.Printf("node: %s\n", node)
+		nodeId, err = fs.Move(ctx, nodeId, childNodeId, "rapid_upload.2.js")
+		require.NoError(t, err)
+		sleep()
+		file, err := fs.Open(ctx, nodeId, map[string]string{})
+		require.NoError(t, err)
+		data, err := ioutil.ReadAll(file)
+		require.NoError(t, err)
+		fmt.Printf("read: %s\n", string(data[:20]))
+		sleep()
+	}
+	err = fs.Remove(ctx, childNodeId)
 	require.NoError(t, err)
 }
 
@@ -138,39 +91,4 @@ func TestCalcProof(t *testing.T) {
 	buf2 := make([]byte, 4)
 	_, _ = rd.Read(buf2)
 	assert.Equal(t, []byte{0x49, 0x44, 0x33, 0x03}, buf2)
-}
-
-func TestRapidUpload(t *testing.T) {
-	ctx := setup(t)
-	file, err := os.Open("../../../rapid_upload.txt")
-	require.NoError(t, err)
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		pair := scanner.Text()
-		if strings.HasPrefix(pair, "# ") {
-			continue
-		}
-
-		idx := strings.Index(pair, ";")
-		if idx < 0 {
-			continue
-		}
-
-		realPath := strings.TrimSpace(pair[:idx])
-		drivePath := strings.TrimSpace(pair[idx+1:])
-		if realPath == "" || drivePath == "" {
-			continue
-		}
-
-		fmt.Printf("Uploading %s to %s ...\n", realPath, drivePath)
-		fd, err := os.Open(realPath)
-		require.NoError(t, err)
-		info, err := fd.Stat()
-		require.NoError(t, err)
-		_, err = fs.CreateFile(ctx, drivePath, info.Size(), fd, true)
-		require.NoError(t, err)
-		fd.Close()
-	}
 }

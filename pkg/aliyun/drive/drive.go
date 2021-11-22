@@ -30,10 +30,11 @@ const (
 const (
 	apiRefreshToken        = "https://auth.aliyundrive.com/v2/account/token"
 	apiList                = "https://api.aliyundrive.com/v2/file/list"
+	apiCreate              = "https://api.aliyundrive.com/v2/file/create"
 	apiCreateFileWithProof = "https://api.aliyundrive.com/v2/file/create_with_proof"
 	apiCompleteUpload      = "https://api.aliyundrive.com/v2/file/complete"
-	apiFileGet             = "https://api.aliyundrive.com/v2/file/get"
-	apiFileGetByPath       = "https://api.aliyundrive.com/v2/file/get_by_path"
+	apiGet                 = "https://api.aliyundrive.com/v2/file/get"
+	apiGetByPath           = "https://api.aliyundrive.com/v2/file/get_by_path"
 	apiCreateWithFolder    = "https://api.aliyundrive.com/adrive/v2/file/createWithFolders"
 	apiTrash               = "https://api.aliyundrive.com/v2/recyclebin/trash"
 	apiDelete              = "https://api.aliyundrive.com/v3/file/delete"
@@ -51,17 +52,18 @@ var (
 )
 
 type Fs interface {
-	Get(ctx context.Context, fullPath string, kind string) (*Node, error)
-	List(ctx context.Context, fullPath string) ([]Node, error)
-	CreateFolder(ctx context.Context, fullPath string) (*Node, error)
-	Rename(ctx context.Context, node *Node, newName string) error
-	Move(ctx context.Context, node *Node, dstParent *Node, dstName string) error
-	Remove(ctx context.Context, node *Node) error
-	Open(ctx context.Context, node *Node, headers map[string]string) (io.ReadCloser, error)
-	CreateFile(ctx context.Context, fullPath string, size int64, in io.Reader, overwrite bool) (*Node, error)
-	CalcProof(fileSize int64, in *os.File) (*os.File, string, error)
-	CreateFileWithProof(ctx context.Context, fullPath string, size int64, in io.Reader, sha1Code string, proofCode string, overwrite bool) (*Node, error)
-	Copy(ctx context.Context, node *Node, dstParent *Node, dstName string) error
+	Get(ctx context.Context, nodeId string) (*Node, error)
+	GetByPath(ctx context.Context, fullPath string, kind string) (*Node, error)
+	List(ctx context.Context, nodeId string) ([]Node, error)
+	CreateFolder(ctx context.Context, parentNodeId string, name string) (nodeIdOut string, err error)
+	Move(ctx context.Context, nodeId string, dstParentNodeId string, dstName string) (nodeIdOut string, err error)
+	Remove(ctx context.Context, nodeId string) error
+	Open(ctx context.Context, nodeId string, headers map[string]string) (io.ReadCloser, error)
+	CreateFile(ctx context.Context, parentNodeId string, name string, size int64, in io.Reader) (nodeIdOut string, err error)
+	CalcProof(fileSize int64, in *os.File) (file *os.File, proof string, err error)
+	CreateFileWithProof(ctx context.Context, parentNodeId string, name string, size int64, in io.Reader, sha1Code string, proofCode string) (nodeIdOut string, err error)
+	Copy(ctx context.Context, nodeId string, dstParentNodeId string, dstName string) (nodeIdOut string, err error)
+	CreateFolderRecursively(ctx context.Context, fullPath string) (nodeIdOut string, err error)
 }
 
 type Config struct {
@@ -178,7 +180,7 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 	}
 	defer res.Body.Close()
 
-	if res.StatusCode == http.StatusNotFound {
+	if res.StatusCode == http.StatusNotFound && (url == apiGet || url == apiGetByPath) {
 		return errors.Wrapf(os.ErrNotExist, `failed to request "%s", got "%d"`, url, res.StatusCode)
 	}
 
@@ -252,10 +254,10 @@ func normalizePath(s string) string {
 	return s
 }
 
-func (drive *Drive) listNodes(ctx context.Context, node *Node) ([]Node, error) {
+func (drive *Drive) listNodes(ctx context.Context, nodeId string) ([]Node, error) {
 	data := map[string]interface{}{
 		"drive_id":       drive.driveId,
-		"parent_file_id": node.NodeId,
+		"parent_file_id": nodeId,
 		"limit":          200,
 		"marker":         "",
 	}
@@ -278,8 +280,8 @@ func (drive *Drive) listNodes(ctx context.Context, node *Node) ([]Node, error) {
 	return nodes, nil
 }
 
-func (drive *Drive) findNameNode(ctx context.Context, node *Node, name string, kind string) (*Node, error) {
-	nodes, err := drive.listNodes(ctx, node)
+func (drive *Drive) findNameNode(ctx context.Context, nodeId string, name string, kind string) (*Node, error) {
+	nodes, err := drive.listNodes(ctx, nodeId)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -290,11 +292,26 @@ func (drive *Drive) findNameNode(ctx context.Context, node *Node, name string, k
 		}
 	}
 
-	return nil, errors.Wrapf(os.ErrNotExist, `can't find "%s", kind: "%s" under "%s"`, name, kind, node)
+	return nil, errors.Wrapf(os.ErrNotExist, `can't find "%s", kind: "%s" under "%s"`, name, kind, nodeId)
+}
+
+// https://help.aliyun.com/document_detail/175927.html#h2-u83B7u53D6u6587u4EF6u6216u6587u4EF6u5939u4FE1u606F17
+func (drive *Drive) Get(ctx context.Context, nodeId string) (*Node, error) {
+	data := map[string]interface{}{
+		"drive_id": drive.driveId,
+		"file_id":  nodeId,
+	}
+	var node Node
+	err := drive.jsonRequest(ctx, "POST", apiGet, &data, &node)
+	if err != nil {
+		return nil, err
+	}
+
+	return &node, nil
 }
 
 // https://help.aliyun.com/document_detail/175927.html#pdsgetfilebypathrequest
-func (drive *Drive) Get(ctx context.Context, fullPath string, kind string) (*Node, error) {
+func (drive *Drive) GetByPath(ctx context.Context, fullPath string, kind string) (*Node, error) {
 	fullPath = normalizePath(fullPath)
 
 	if fullPath == "/" || fullPath == "" {
@@ -307,7 +324,7 @@ func (drive *Drive) Get(ctx context.Context, fullPath string, kind string) (*Nod
 	}
 
 	var node *Node
-	err := drive.jsonRequest(ctx, "POST", apiFileGetByPath, &data, &node)
+	err := drive.jsonRequest(ctx, "POST", apiGetByPath, &data, &node)
 	// paths with surrounding white spaces (like `/ test / test1 `)
 	// can't be found by `get_by_path`
 	// https://github.com/K265/aliyundrive-go/issues/3
@@ -320,144 +337,75 @@ func (drive *Drive) Get(ctx context.Context, fullPath string, kind string) (*Nod
 	}
 
 	parent, name := path.Split(fullPath)
-	parentNode, err := drive.Get(ctx, parent, FolderKind)
+	parentNode, err := drive.GetByPath(ctx, parent, FolderKind)
 	if err != nil {
-		return nil, errors.Wrapf(err, `failed to request "%s"`, apiFileGetByPath)
+		return nil, errors.Wrapf(err, `failed to request "%s"`, apiGetByPath)
 	}
 
-	return drive.findNameNode(ctx, parentNode, name, kind)
+	return drive.findNameNode(ctx, parentNode.NodeId, name, kind)
 }
 
 func findNodeError(err error, path string) error {
 	return errors.Wrapf(err, `failed to find node of "%s"`, path)
 }
 
-func (drive *Drive) List(ctx context.Context, fullPath string) ([]Node, error) {
-	fullPath = normalizePath(fullPath)
-	node, err := drive.Get(ctx, fullPath, FolderKind)
-	if err != nil {
-		return nil, findNodeError(err, fullPath)
-	}
-
-	nodes, err2 := drive.listNodes(ctx, node)
-	if err2 != nil {
-		return nil, errors.Wrapf(err2, `failed to list nodes of "%s"`, node)
-	}
-
-	return nodes, nil
+func (drive *Drive) List(ctx context.Context, nodeId string) ([]Node, error) {
+	return drive.listNodes(ctx, nodeId)
 }
 
-func (drive *Drive) createFolderInternal(ctx context.Context, parent string, name string) (*Node, error) {
-	drive.mutex.Lock()
-	defer drive.mutex.Unlock()
-
-	node, err := drive.Get(ctx, parent+"/"+name, FolderKind)
-	if err == nil {
-		return node, nil
-	}
-
-	node, err = drive.Get(ctx, parent, FolderKind)
-	if err != nil {
-		return nil, findNodeError(err, parent)
-	}
+func (drive *Drive) CreateFolder(ctx context.Context, parentNodeId string, name string) (string, error) {
 	body := map[string]string{
 		"drive_id":        drive.driveId,
 		"check_name_mode": "refuse",
 		"name":            name,
-		"parent_file_id":  node.NodeId,
+		"parent_file_id":  parentNodeId,
 		"type":            "folder",
 	}
-	var createdNode Node
-	err = drive.jsonRequest(ctx, "POST", apiCreateFileWithProof, &body, &createdNode)
+	var result NodeId
+	err := drive.jsonRequest(ctx, "POST", apiCreate, &body, &result)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to post create folder request")
+		return "", errors.Wrap(err, "failed to post create folder request")
 	}
-	createdNode.Name = name
-	return &createdNode, nil
+	return result.NodeId, nil
 }
 
-func (drive *Drive) CreateFolder(ctx context.Context, fullPath string) (*Node, error) {
-	fullPath = normalizePath(fullPath)
-	pathLen := len(fullPath)
-	i := 0
-	var createdNode *Node
-	for i < pathLen {
-		parent := fullPath[:i]
-		remain := fullPath[i+1:]
-		j := strings.Index(remain, "/")
-		if j < 0 {
-			// already at last position
-			return drive.createFolderInternal(ctx, parent, remain)
-		} else {
-			node, err := drive.createFolderInternal(ctx, parent, remain[:j])
-			if err != nil {
-				return nil, err
-			}
-			i = i + j + 1
-			createdNode = node
-		}
+func (drive *Drive) checkRoot(nodeId string) error {
+	if nodeId == "" {
+		return errors.New("empty nodeId")
 	}
-
-	return createdNode, nil
-}
-
-func (drive *Drive) checkRoot(node *Node) error {
-	if node == nil {
-		return errors.New("empty node")
-	}
-	if node.NodeId == drive.rootId {
+	if nodeId == drive.rootId {
 		return errors.New("can't operate on root ")
 	}
 	return nil
 }
 
-func (drive *Drive) Rename(ctx context.Context, node *Node, newName string) error {
-	if err := drive.checkRoot(node); err != nil {
-		return err
+func (drive *Drive) Move(ctx context.Context, nodeId string, dstParentNodeId string, dstName string) (string, error) {
+	if err := drive.checkRoot(nodeId); err != nil {
+		return "", err
 	}
 
-	data := map[string]interface{}{
-		"check_name_mode": "refuse",
-		"drive_id":        drive.driveId,
-		"file_id":         node.NodeId,
-		"name":            newName,
-	}
-	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/update", &data, nil)
-	if err != nil {
-		return errors.Wrap(err, `failed to post rename request`)
-	}
-	return nil
-}
-
-func (drive *Drive) Move(ctx context.Context, node *Node, dstParent *Node, dstName string) error {
-	if err := drive.checkRoot(node); err != nil {
-		return err
-	}
-
-	if dstParent == nil {
-		return errors.New("parent node is empty")
-	}
 	body := map[string]string{
 		"drive_id":          drive.driveId,
-		"file_id":           node.NodeId,
-		"to_parent_file_id": dstParent.NodeId,
+		"file_id":           nodeId,
+		"to_parent_file_id": dstParentNodeId,
 		"new_name":          dstName,
 	}
-	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/move", &body, nil)
+	var result NodeId
+	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/move", &body, &result)
 	if err != nil {
-		return errors.Wrap(err, `failed to post move request`)
+		return "", errors.Wrap(err, `failed to post move request`)
 	}
-	return nil
+	return result.NodeId, nil
 }
 
-func (drive *Drive) Remove(ctx context.Context, node *Node) error {
-	if err := drive.checkRoot(node); err != nil {
+func (drive *Drive) Remove(ctx context.Context, nodeId string) error {
+	if err := drive.checkRoot(nodeId); err != nil {
 		return err
 	}
 
 	body := map[string]string{
 		"drive_id": drive.driveId,
-		"file_id":  node.NodeId,
+		"file_id":  nodeId,
 	}
 
 	err := drive.jsonRequest(ctx, "POST", apiTrash, &body, nil)
@@ -467,25 +415,25 @@ func (drive *Drive) Remove(ctx context.Context, node *Node) error {
 	return nil
 }
 
-func (drive *Drive) getDownloadUrl(ctx context.Context, node *Node) (*DownloadUrl, error) {
+func (drive *Drive) getDownloadUrl(ctx context.Context, nodeId string) (*DownloadUrl, error) {
 	var detail DownloadUrl
 	data := map[string]string{
 		"drive_id": drive.driveId,
-		"file_id":  node.NodeId,
+		"file_id":  nodeId,
 	}
 	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/get_download_url", &data, &detail)
 	if err != nil {
-		return nil, errors.Wrapf(err, `failed to get node detail of "%s"`, node)
+		return nil, errors.Wrapf(err, `failed to get node detail of "%s"`, nodeId)
 	}
 	return &detail, nil
 }
 
-func (drive *Drive) Open(ctx context.Context, node *Node, headers map[string]string) (io.ReadCloser, error) {
-	if err := drive.checkRoot(node); err != nil {
+func (drive *Drive) Open(ctx context.Context, nodeId string, headers map[string]string) (io.ReadCloser, error) {
+	if err := drive.checkRoot(nodeId); err != nil {
 		return nil, err
 	}
 
-	downloadUrl, err := drive.getDownloadUrl(ctx, node)
+	downloadUrl, err := drive.getDownloadUrl(ctx, nodeId)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +454,7 @@ func (drive *Drive) Open(ctx context.Context, node *Node, headers map[string]str
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)
 		for t, u := range streamsUrl {
-			name := node.Name + "." + t
+			name := "output." + t
 			w, err := zw.Create(name)
 			if err != nil {
 				return nil, errors.Wrapf(err, `failed to creat entry "%s" in zip file`, name)
@@ -532,7 +480,7 @@ func (drive *Drive) Open(ctx context.Context, node *Node, headers map[string]str
 		return io.NopCloser(&buf), nil
 	}
 
-	return nil, errors.Errorf(`failed to open "%s"`, node)
+	return nil, errors.Errorf(`failed to open "%s"`, nodeId)
 }
 
 func CalcSha1(in *os.File) (*os.File, string, error) {
@@ -565,7 +513,7 @@ func (drive *Drive) CalcProof(fileSize int64, in *os.File) (*os.File, string, er
 	return calcProof(drive.accessToken, fileSize, in)
 }
 
-func (drive *Drive) CreateFile(ctx context.Context, fullPath string, size int64, in io.Reader, overwrite bool) (*Node, error) {
+func (drive *Drive) CreateFile(ctx context.Context, parentNodeId string, name string, size int64, in io.Reader) (string, error) {
 	sha1Code := ""
 	proofCode := ""
 
@@ -575,7 +523,7 @@ func (drive *Drive) CreateFile(ctx context.Context, fullPath string, size int64,
 		in, proofCode, _ = drive.CalcProof(size, fin)
 	}
 
-	return drive.CreateFileWithProof(ctx, fullPath, size, in, sha1Code, proofCode, overwrite)
+	return drive.CreateFileWithProof(ctx, parentNodeId, name, size, in, sha1Code, proofCode)
 }
 
 func makePartInfoList(size int64) []*PartInfo {
@@ -593,33 +541,9 @@ func makePartInfoList(size int64) []*PartInfo {
 	return list
 }
 
-func (drive *Drive) CreateFileWithProof(ctx context.Context, fullPath string, size int64, in io.Reader, sha1Code string, proofCode string, overwrite bool) (*Node, error) {
-	fullPath = normalizePath(fullPath)
-	if strings.HasSuffix(strings.ToLower(fullPath), ".livp") {
-		return nil, errLivpUpload
-	}
-
-	if overwrite {
-		node, err := drive.Get(ctx, fullPath, FileKind)
-		if err == nil {
-			err = drive.Remove(ctx, node)
-			if err != nil {
-				return nil, errors.Wrapf(err, `failed to overwrite "%s", can't remove file`, fullPath)
-			}
-		}
-	}
-
-	i := strings.LastIndex(fullPath, "/")
-	parent := fullPath[:i]
-	name := fullPath[i+1:]
-	_, err := drive.CreateFolder(ctx, parent)
-	if err != nil {
-		return nil, errors.Wrapf(err, `failed to create folder "%s"`, parent)
-	}
-
-	node, err := drive.Get(ctx, parent, FolderKind)
-	if err != nil {
-		return nil, findNodeError(err, parent)
+func (drive *Drive) CreateFileWithProof(ctx context.Context, parentNodeId string, name string, size int64, in io.Reader, sha1Code string, proofCode string) (string, error) {
+	if strings.HasSuffix(strings.ToLower(name), ".livp") {
+		return "", errLivpUpload
 	}
 
 	var proofResult ProofResult
@@ -627,10 +551,10 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, fullPath string, si
 	proof := &FileProof{
 		DriveID:         drive.driveId,
 		PartInfoList:    makePartInfoList(size),
-		ParentFileID:    node.NodeId,
+		ParentFileID:    parentNodeId,
 		Name:            name,
 		Type:            "file",
-		CheckNameMode:   "auto_rename",
+		CheckNameMode:   "refuse",
 		Size:            size,
 		ContentHash:     sha1Code,
 		ContentHashName: "sha1",
@@ -639,18 +563,18 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, fullPath string, si
 	}
 
 	{
-		err = drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/create_with_proof", proof, &proofResult)
+		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/create_with_proof", proof, &proofResult)
 		if err != nil {
-			return nil, errors.Wrap(err, `failed to post create file request`)
+			return "", errors.Wrap(err, `failed to post create file request`)
 		}
 
 		if proofResult.RapidUpload {
 			// rapid upload
-			return drive.Get(ctx, fullPath, FileKind)
+			return proofResult.FileId, nil
 		}
 
 		if len(proofResult.PartInfoList) < 1 {
-			return nil, errors.New(`failed to extract uploadUrl`)
+			return "", errors.New(`failed to extract uploadUrl`)
 		}
 	}
 
@@ -658,16 +582,16 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, fullPath string, si
 		partReader := io.LimitReader(in, MaxPartSize)
 		req, err := http.NewRequestWithContext(ctx, "PUT", part.UploadUrl, partReader)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to create upload request")
+			return "", errors.Wrap(err, "failed to create upload request")
 		}
 		resp, err := drive.httpClient.Do(req)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to upload file")
+			return "", errors.Wrap(err, "failed to upload file")
 		}
 		resp.Body.Close()
 	}
 
-	var createdNode Node
+	var result NodeId
 	{
 		body := map[string]interface{}{
 			"drive_id":  drive.driveId,
@@ -675,29 +599,80 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, fullPath string, si
 			"upload_id": proofResult.UploadId,
 		}
 
-		err := drive.jsonRequest(ctx, "POST", apiCompleteUpload, &body, &createdNode)
+		err := drive.jsonRequest(ctx, "POST", apiCompleteUpload, &body, &result)
 		if err != nil {
-			return nil, errors.Wrap(err, `failed to post upload complete request`)
+			return "", errors.Wrap(err, `failed to post upload complete request`)
 		}
 	}
-	return &createdNode, nil
+	return result.NodeId, nil
 }
 
 // https://help.aliyun.com/document_detail/175927.html#pdscopyfilerequest
-func (drive *Drive) Copy(ctx context.Context, node *Node, dstParent *Node, dstName string) error {
-	if dstParent == nil {
-		return errors.New("parent node is empty")
-	}
+func (drive *Drive) Copy(ctx context.Context, nodeId string, dstParentNodeId string, dstName string) (string, error) {
 	body := map[string]string{
 		"drive_id":          drive.driveId,
-		"file_id":           node.NodeId,
-		"to_parent_file_id": dstParent.NodeId,
+		"file_id":           nodeId,
+		"to_parent_file_id": dstParentNodeId,
 		"new_name":          dstName,
 	}
-	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/copy", &body, nil)
+	var result NodeId
+	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/copy", &body, &result)
 	if err != nil {
-		return errors.Wrap(err, `failed to post copy request`)
+		return "", errors.Wrap(err, `failed to post copy request`)
 	}
 
-	return nil
+	return result.NodeId, nil
+}
+
+func (drive *Drive) createFolderInternal(ctx context.Context, parent string, name string) (string, error) {
+	drive.mutex.Lock()
+	defer drive.mutex.Unlock()
+
+	node, err := drive.GetByPath(ctx, parent+"/"+name, FolderKind)
+	if err == nil {
+		return node.NodeId, nil
+	}
+
+	node, err = drive.GetByPath(ctx, parent, FolderKind)
+	if err != nil {
+		return "", findNodeError(err, parent)
+	}
+	body := map[string]string{
+		"drive_id":        drive.driveId,
+		"check_name_mode": "refuse",
+		"name":            name,
+		"parent_file_id":  node.NodeId,
+		"type":            "folder",
+	}
+	var result NodeId
+	err = drive.jsonRequest(ctx, "POST", apiCreate, &body, &result)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to post create folder request")
+	}
+	return result.NodeId, nil
+}
+
+func (drive *Drive) CreateFolderRecursively(ctx context.Context, fullPath string) (string, error) {
+	fullPath = normalizePath(fullPath)
+	pathLen := len(fullPath)
+	i := 0
+	var nodeId string
+	for i < pathLen {
+		parent := fullPath[:i]
+		remain := fullPath[i+1:]
+		j := strings.Index(remain, "/")
+		if j < 0 {
+			// already at last position
+			return drive.createFolderInternal(ctx, parent, remain)
+		} else {
+			nodeId2, err := drive.createFolderInternal(ctx, parent, remain[:j])
+			if err != nil {
+				return "", err
+			}
+			i = i + j + 1
+			nodeId = nodeId2
+		}
+	}
+
+	return nodeId, nil
 }
