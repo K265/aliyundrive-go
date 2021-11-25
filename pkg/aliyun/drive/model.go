@@ -89,6 +89,7 @@ type PartInfo struct {
 
 type ProofResult struct {
 	PartInfoList []PartInfo `json:"part_info_list,omitempty"`
+	Exist        bool       `json:"exist,omitempty"`
 	FileId       string     `json:"file_id"`
 	RapidUpload  bool       `json:"rapid_upload"`
 	UploadId     string     `json:"upload_id"`

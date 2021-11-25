@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	FolderKind = "folder"
-	FileKind   = "file"
-	AnyKind    = "any"
+	FolderKind  = "folder"
+	FileKind    = "file"
+	AnyKind     = "any"
+	MaxPartSize = 1024 * 1024 * 1024 // 1 GiB
 )
 
 const (
@@ -43,12 +44,11 @@ const (
 	fakeUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.77 Safari/537.36"
 )
 
-const (
-	MaxPartSize = 1024 * 1024 * 1024 // 1G
-)
-
 var (
-	errLivpUpload = errors.New("uploading .livp to album is not supported")
+	ErrorLivpUpload      = errors.New("uploading .livp to album is not supported")
+	ErrorTooManyRequests = errors.New("429 Too Many Requests")
+	ErrorNotFound        = errors.New("404 Not Found")
+	ErrorAlreadyExisted  = errors.New("already existed")
 )
 
 type Fs interface {
@@ -180,8 +180,12 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 	}
 	defer res.Body.Close()
 
-	if res.StatusCode == http.StatusNotFound && (url == apiGet || url == apiGetByPath) {
-		return errors.Wrapf(os.ErrNotExist, `failed to request "%s", got "%d"`, url, res.StatusCode)
+	switch res.StatusCode {
+	case http.StatusNotFound:
+		return ErrorNotFound
+	case http.StatusTooManyRequests:
+		return ErrorTooManyRequests
+	default:
 	}
 
 	if res.StatusCode >= 400 {
@@ -543,7 +547,7 @@ func makePartInfoList(size int64) []*PartInfo {
 
 func (drive *Drive) CreateFileWithProof(ctx context.Context, parentNodeId string, name string, size int64, in io.Reader, sha1Code string, proofCode string) (string, error) {
 	if strings.HasSuffix(strings.ToLower(name), ".livp") {
-		return "", errLivpUpload
+		return "", ErrorLivpUpload
 	}
 
 	var proofResult ProofResult
@@ -569,8 +573,11 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, parentNodeId string
 		}
 
 		if proofResult.RapidUpload {
-			// rapid upload
 			return proofResult.FileId, nil
+		}
+
+		if proofResult.Exist {
+			return "", ErrorAlreadyExisted
 		}
 
 		if len(proofResult.PartInfoList) < 1 {
