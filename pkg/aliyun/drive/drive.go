@@ -67,9 +67,10 @@ type Fs interface {
 }
 
 type Config struct {
-	RefreshToken string
-	IsAlbum      bool
-	HttpClient   *http.Client
+	RefreshToken   string
+	IsAlbum        bool
+	HttpClient     *http.Client
+	OnRefreshToken func(refreshToken string)
 }
 
 func (config Config) String() string {
@@ -149,6 +150,10 @@ func (drive *Drive) refreshToken(ctx context.Context) error {
 
 	drive.accessToken = token.AccessToken
 	drive.expireAt = token.ExpiresIn + time.Now().Unix()
+	drive.config.RefreshToken = token.RefreshToken
+	if drive.config.OnRefreshToken != nil {
+		drive.config.OnRefreshToken(token.RefreshToken)
+	}
 	return nil
 }
 

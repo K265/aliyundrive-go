@@ -58,8 +58,9 @@ type AlbumInfo struct {
 }
 
 type Token struct {
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int64  `json:"expires_in"`
+	AccessToken  string `json:"access_token"`
+	ExpiresIn    int64  `json:"expires_in"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 type DownloadUrl struct {
