@@ -30,6 +30,7 @@ const (
 
 const (
 	apiRefreshToken        = "https://auth.aliyundrive.com/v2/account/token"
+	apiPersonalInfo        = "https://api.aliyundrive.com/v2/databox/get_personal_info"
 	apiList                = "https://api.aliyundrive.com/v2/file/list"
 	apiCreate              = "https://api.aliyundrive.com/v2/file/create"
 	apiCreateFileWithProof = "https://api.aliyundrive.com/v2/file/create_with_proof"
@@ -52,6 +53,7 @@ var (
 )
 
 type Fs interface {
+	About(ctx context.Context) (*PersonalSpaceInfo, error)
 	Get(ctx context.Context, nodeId string) (*Node, error)
 	GetByPath(ctx context.Context, fullPath string, kind string) (*Node, error)
 	List(ctx context.Context, nodeId string) ([]Node, error)
@@ -356,6 +358,17 @@ func (drive *Drive) GetByPath(ctx context.Context, fullPath string, kind string)
 
 func findNodeError(err error, path string) error {
 	return errors.Wrapf(err, `failed to find node of "%s"`, path)
+}
+
+func (drive *Drive) About(ctx context.Context) (*PersonalSpaceInfo, error) {
+	body := map[string]string{}
+	var result PersonalInfo
+	err := drive.jsonRequest(ctx, "POST", apiPersonalInfo, &body, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return &result.PersonalSpaceInfo, nil
 }
 
 func (drive *Drive) List(ctx context.Context, nodeId string) ([]Node, error) {

@@ -7,8 +7,7 @@ import (
 	"net/http"
 	"os"
 	"testing"
-	"time"
-
+	
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,17 +32,14 @@ func setup(t *testing.T) context.Context {
 	return ctx
 }
 
-func sleep() {
-	time.Sleep(time.Millisecond * 200)
-}
-
 func TestIntegration(t *testing.T) {
 	ctx := setup(t)
+	info, err := fs.About(ctx)
+	require.NoError(t, err)
+	fmt.Printf("%#v\n", info)
 	testRootNodeId, err := fs.CreateFolderRecursively(ctx, "/")
-	sleep()
 	require.NoError(t, err)
 	childNodeId, err := fs.CreateFolder(ctx, testRootNodeId, "测试")
-	sleep()
 	require.NoError(t, err)
 	{
 		fd, err := os.Open("../../../assets/rapid_upload.js")
@@ -52,20 +48,16 @@ func TestIntegration(t *testing.T) {
 		require.NoError(t, err)
 		nodeId, err := fs.CreateFile(ctx, childNodeId, "rapid_upload.js", info.Size(), fd)
 		require.NoError(t, err)
-		sleep()
 		node, err := fs.Get(ctx, nodeId)
 		require.NoError(t, err)
-		sleep()
 		fmt.Printf("node: %s\n", node)
 		nodeId, err = fs.Move(ctx, nodeId, childNodeId, "rapid_upload.2.js")
 		require.NoError(t, err)
-		sleep()
 		file, err := fs.Open(ctx, nodeId, map[string]string{})
 		require.NoError(t, err)
 		data, err := ioutil.ReadAll(file)
 		require.NoError(t, err)
 		fmt.Printf("read: %s\n", string(data[:20]))
-		sleep()
 	}
 	err = fs.Remove(ctx, childNodeId)
 	require.NoError(t, err)

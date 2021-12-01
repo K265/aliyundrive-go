@@ -96,3 +96,12 @@ type ProofResult struct {
 	UploadId     string     `json:"upload_id"`
 	FileName     string     `json:"file_name"`
 }
+
+type PersonalSpaceInfo struct {
+	Used  int64 `json:"used_size"`
+	Total int64 `json:"total_size"`
+}
+
+type PersonalInfo struct {
+	PersonalSpaceInfo PersonalSpaceInfo `json:"personal_space_info"`
+}
