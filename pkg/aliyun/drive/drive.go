@@ -33,6 +33,9 @@ const (
 	apiPersonalInfo        = "https://api.aliyundrive.com/v2/databox/get_personal_info"
 	apiList                = "https://api.aliyundrive.com/v2/file/list"
 	apiCreate              = "https://api.aliyundrive.com/v2/file/create"
+	apiUpdate              = "https://api.aliyundrive.com/v2/file/update"
+	apiMove                = "https://api.aliyundrive.com/v2/file/move"
+	apiCopy                = "https://api.aliyundrive.com/v2/file/copy"
 	apiCreateFileWithProof = "https://api.aliyundrive.com/v2/file/create_with_proof"
 	apiCompleteUpload      = "https://api.aliyundrive.com/v2/file/complete"
 	apiGet                 = "https://api.aliyundrive.com/v2/file/get"
@@ -57,15 +60,16 @@ type Fs interface {
 	Get(ctx context.Context, nodeId string) (*Node, error)
 	GetByPath(ctx context.Context, fullPath string, kind string) (*Node, error)
 	List(ctx context.Context, nodeId string) ([]Node, error)
-	CreateFolder(ctx context.Context, parentNodeId string, name string) (nodeIdOut string, err error)
+	CreateFolder(ctx context.Context, node Node) (nodeIdOut string, err error)
 	Move(ctx context.Context, nodeId string, dstParentNodeId string, dstName string) (nodeIdOut string, err error)
 	Remove(ctx context.Context, nodeId string) error
 	Open(ctx context.Context, nodeId string, headers map[string]string) (io.ReadCloser, error)
-	CreateFile(ctx context.Context, parentNodeId string, name string, size int64, in io.Reader) (nodeIdOut string, err error)
+	CreateFile(ctx context.Context, node Node, in io.Reader) (nodeIdOut string, err error)
 	CalcProof(fileSize int64, in *os.File) (file *os.File, proof string, err error)
-	CreateFileWithProof(ctx context.Context, parentNodeId string, name string, size int64, in io.Reader, sha1Code string, proofCode string) (nodeIdOut string, err error)
+	CreateFileWithProof(ctx context.Context, node Node, in io.Reader, sha1Code string, proofCode string) (nodeIdOut string, err error)
 	Copy(ctx context.Context, nodeId string, dstParentNodeId string, dstName string) (nodeIdOut string, err error)
 	CreateFolderRecursively(ctx context.Context, fullPath string) (nodeIdOut string, err error)
+	Update(ctx context.Context, node Node) (nodeIdOut string, err error)
 }
 
 type Config struct {
@@ -375,13 +379,14 @@ func (drive *Drive) List(ctx context.Context, nodeId string) ([]Node, error) {
 	return drive.listNodes(ctx, nodeId)
 }
 
-func (drive *Drive) CreateFolder(ctx context.Context, parentNodeId string, name string) (string, error) {
+func (drive *Drive) CreateFolder(ctx context.Context, node Node) (string, error) {
 	body := map[string]string{
 		"drive_id":        drive.driveId,
 		"check_name_mode": "refuse",
-		"name":            name,
-		"parent_file_id":  parentNodeId,
+		"name":            node.Name,
+		"parent_file_id":  node.ParentId,
 		"type":            "folder",
+		"meta":            node.Meta,
 	}
 	var result NodeId
 	err := drive.jsonRequest(ctx, "POST", apiCreate, &body, &result)
@@ -413,7 +418,7 @@ func (drive *Drive) Move(ctx context.Context, nodeId string, dstParentNodeId str
 		"new_name":          dstName,
 	}
 	var result NodeId
-	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/move", &body, &result)
+	err := drive.jsonRequest(ctx, "POST", apiMove, &body, &result)
 	if err != nil {
 		return "", errors.Wrap(err, `failed to post move request`)
 	}
@@ -535,17 +540,17 @@ func (drive *Drive) CalcProof(fileSize int64, in *os.File) (*os.File, string, er
 	return calcProof(drive.accessToken, fileSize, in)
 }
 
-func (drive *Drive) CreateFile(ctx context.Context, parentNodeId string, name string, size int64, in io.Reader) (string, error) {
+func (drive *Drive) CreateFile(ctx context.Context, node Node, in io.Reader) (string, error) {
 	sha1Code := ""
 	proofCode := ""
 
 	fin, ok := in.(*os.File)
 	if ok {
 		in, sha1Code, _ = CalcSha1(fin)
-		in, proofCode, _ = drive.CalcProof(size, fin)
+		in, proofCode, _ = drive.CalcProof(node.Size, fin)
 	}
 
-	return drive.CreateFileWithProof(ctx, parentNodeId, name, size, in, sha1Code, proofCode)
+	return drive.CreateFileWithProof(ctx, node, in, sha1Code, proofCode)
 }
 
 func makePartInfoList(size int64) []*PartInfo {
@@ -563,8 +568,8 @@ func makePartInfoList(size int64) []*PartInfo {
 	return list
 }
 
-func (drive *Drive) CreateFileWithProof(ctx context.Context, parentNodeId string, name string, size int64, in io.Reader, sha1Code string, proofCode string) (string, error) {
-	if strings.HasSuffix(strings.ToLower(name), ".livp") {
+func (drive *Drive) CreateFileWithProof(ctx context.Context, node Node, in io.Reader, sha1Code string, proofCode string) (string, error) {
+	if strings.HasSuffix(strings.ToLower(node.Name), ".livp") {
 		return "", ErrorLivpUpload
 	}
 
@@ -572,20 +577,21 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, parentNodeId string
 
 	proof := &FileProof{
 		DriveID:         drive.driveId,
-		PartInfoList:    makePartInfoList(size),
-		ParentFileID:    parentNodeId,
-		Name:            name,
+		PartInfoList:    makePartInfoList(node.Size),
+		ParentFileID:    node.ParentId,
+		Name:            node.Name,
 		Type:            "file",
 		CheckNameMode:   "refuse",
-		Size:            size,
+		Size:            node.Size,
 		ContentHash:     sha1Code,
 		ContentHashName: "sha1",
 		ProofCode:       proofCode,
 		ProofVersion:    "v1",
+		Meta:            node.Meta,
 	}
 
 	{
-		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/create_with_proof", proof, &proofResult)
+		err := drive.jsonRequest(ctx, "POST", apiCreateFileWithProof, proof, &proofResult)
 		if err != nil {
 			return "", errors.Wrap(err, `failed to post create file request`)
 		}
@@ -641,7 +647,7 @@ func (drive *Drive) Copy(ctx context.Context, nodeId string, dstParentNodeId str
 		"new_name":          dstName,
 	}
 	var result NodeId
-	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/copy", &body, &result)
+	err := drive.jsonRequest(ctx, "POST", apiCopy, &body, &result)
 	if err != nil {
 		return "", errors.Wrap(err, `failed to post copy request`)
 	}
@@ -700,4 +706,20 @@ func (drive *Drive) CreateFolderRecursively(ctx context.Context, fullPath string
 	}
 
 	return nodeId, nil
+}
+
+func (drive *Drive) Update(ctx context.Context, node Node) (string, error) {
+	body := map[string]string{
+		"drive_id": drive.driveId,
+		"file_id":  node.NodeId,
+		//"check_name_mode": "refuse",
+		"name": node.Name,
+		"meta": node.Meta,
+	}
+	var result NodeId
+	err := drive.jsonRequest(ctx, "POST", apiUpdate, &body, &result)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to post update request")
+	}
+	return result.NodeId, nil
 }
