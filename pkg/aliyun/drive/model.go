@@ -18,6 +18,7 @@ type Node struct {
 	ParentId    string `json:"parent_file_id,omitempty"`
 	Size        int64  `json:"size,omitempty"`
 	Updated     string `json:"updated_at"`
+	Meta        string `json:"meta,omitempty"`
 }
 
 func (n Node) String() string {
@@ -81,6 +82,7 @@ type FileProof struct {
 	ContentHashName string      `json:"content_hash_name"`
 	ProofCode       string      `json:"proof_code"`
 	ProofVersion    string      `json:"proof_version"`
+	Meta            string      `json:"meta,omitempty"`
 }
 
 type PartInfo struct {

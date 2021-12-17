@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 	"testing"
-	
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,14 +39,14 @@ func TestIntegration(t *testing.T) {
 	fmt.Printf("%#v\n", info)
 	testRootNodeId, err := fs.CreateFolderRecursively(ctx, "/")
 	require.NoError(t, err)
-	childNodeId, err := fs.CreateFolder(ctx, testRootNodeId, "测试")
+	childNodeId, err := fs.CreateFolder(ctx, Node{Name: "测试", ParentId: testRootNodeId})
 	require.NoError(t, err)
 	{
 		fd, err := os.Open("../../../assets/rapid_upload.js")
 		require.NoError(t, err)
 		info, err := fd.Stat()
 		require.NoError(t, err)
-		nodeId, err := fs.CreateFile(ctx, childNodeId, "rapid_upload.js", info.Size(), fd)
+		nodeId, err := fs.CreateFile(ctx, Node{Name: "rapid_upload.js", ParentId: childNodeId, Size: info.Size()}, fd)
 		require.NoError(t, err)
 		node, err := fs.Get(ctx, nodeId)
 		require.NoError(t, err)
@@ -58,6 +58,19 @@ func TestIntegration(t *testing.T) {
 		data, err := ioutil.ReadAll(file)
 		require.NoError(t, err)
 		fmt.Printf("read: %s\n", string(data[:20]))
+		folderNode, err := fs.Get(ctx, childNodeId)
+		folderNode.Meta = "755"
+		_, err = fs.Update(ctx, *folderNode)
+		require.NoError(t, err)
+		node, err = fs.Get(ctx, childNodeId)
+		assert.Equal(t, "755", node.Meta)
+		fileNode, err := fs.Get(ctx, nodeId)
+		fileNode.Meta = "644"
+		fileNode.Name = "rapid_upload.3.js"
+		_, err = fs.Update(ctx, *fileNode)
+		node, err = fs.Get(ctx, nodeId)
+		assert.Equal(t, "644", node.Meta)
+		assert.Equal(t, "rapid_upload.3.js", node.Name)
 	}
 	err = fs.Remove(ctx, childNodeId)
 	require.NoError(t, err)
