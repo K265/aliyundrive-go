@@ -1,4 +1,4 @@
-// This is a golang package written for https://www.aliyundrive.com/
+// Package drive helps you to manage you aliyun drive files.
 package drive
 
 import (
@@ -53,6 +53,7 @@ var (
 	ErrorTooManyRequests = errors.New("429 Too Many Requests")
 	ErrorNotFound        = errors.New("404 Not Found")
 	ErrorAlreadyExisted  = errors.New("already existed")
+	ErrorMissingFields   = errors.New("required fields: ParentId, Name")
 )
 
 type Fs interface {
@@ -60,12 +61,30 @@ type Fs interface {
 	Get(ctx context.Context, nodeId string) (*Node, error)
 	GetByPath(ctx context.Context, fullPath string, kind string) (*Node, error)
 	List(ctx context.Context, nodeId string) ([]Node, error)
+
+	// CreateFolder creates a folder to aliyun drive.
+	//
+	// required Node fields: ParentId, Name.
+	//
+	// may return ErrorMissingFields if required fields are missing.
 	CreateFolder(ctx context.Context, node Node) (nodeIdOut string, err error)
 	Move(ctx context.Context, nodeId string, dstParentNodeId string, dstName string) (nodeIdOut string, err error)
 	Remove(ctx context.Context, nodeId string) error
 	Open(ctx context.Context, nodeId string, headers map[string]string) (io.ReadCloser, error)
+
+	// CreateFile puts a file to aliyun drive.
+	//
+	// required Node fields: ParentId, Name.
+	//
+	// may return ErrorMissingFields if required fields are missing.
 	CreateFile(ctx context.Context, node Node, in io.Reader) (nodeIdOut string, err error)
 	CalcProof(fileSize int64, in *os.File) (file *os.File, proof string, err error)
+
+	// CreateFileWithProof puts a file to aliyun drive.
+	//
+	// required Node fields: ParentId, Name.
+	//
+	// may return ErrorMissingFields if required fields are missing.
 	CreateFileWithProof(ctx context.Context, node Node, in io.Reader, sha1Code string, proofCode string) (nodeIdOut string, err error)
 	Copy(ctx context.Context, nodeId string, dstParentNodeId string, dstName string) (nodeIdOut string, err error)
 	CreateFolderRecursively(ctx context.Context, fullPath string) (nodeIdOut string, err error)
@@ -379,7 +398,19 @@ func (drive *Drive) List(ctx context.Context, nodeId string) ([]Node, error) {
 	return drive.listNodes(ctx, nodeId)
 }
 
+func createCheck(node Node) error {
+	if node.ParentId == "" || node.Name == "" {
+		return ErrorMissingFields
+	}
+
+	return nil
+}
+
 func (drive *Drive) CreateFolder(ctx context.Context, node Node) (string, error) {
+	if err := createCheck(node); err != nil {
+		return "", err
+	}
+
 	body := map[string]string{
 		"drive_id":        drive.driveId,
 		"check_name_mode": "refuse",
@@ -569,6 +600,10 @@ func makePartInfoList(size int64) []*PartInfo {
 }
 
 func (drive *Drive) CreateFileWithProof(ctx context.Context, node Node, in io.Reader, sha1Code string, proofCode string) (string, error) {
+	if err := createCheck(node); err != nil {
+		return "", err
+	}
+
 	if strings.HasSuffix(strings.ToLower(node.Name), ".livp") {
 		return "", ErrorLivpUpload
 	}
