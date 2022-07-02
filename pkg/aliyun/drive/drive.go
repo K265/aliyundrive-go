@@ -49,11 +49,9 @@ const (
 )
 
 var (
-	ErrorLivpUpload      = errors.New("uploading .livp to album is not supported")
-	ErrorTooManyRequests = errors.New("429 Too Many Requests")
-	ErrorNotFound        = errors.New("404 Not Found")
-	ErrorAlreadyExisted  = errors.New("already existed")
-	ErrorMissingFields   = errors.New("required fields: ParentId, Name")
+	ErrorLivpUpload     = errors.New("uploading .livp to album is not supported")
+	ErrorAlreadyExisted = errors.New("already existed")
+	ErrorMissingFields  = errors.New("required fields: ParentId, Name")
 )
 
 type Fs interface {
@@ -115,6 +113,28 @@ type Drive struct {
 type token struct {
 	accessToken string
 	expireAt    int64
+}
+
+type HTTPStatusError interface {
+	error
+	StatusCode() int
+}
+
+type httpStatusError struct {
+	message    string
+	statusCode int
+}
+
+func (err httpStatusError) Error() string {
+	return err.message
+}
+
+func (err httpStatusError) StatusCode() int {
+	return err.statusCode
+}
+
+func newHttpStatusError(message string, statusCode int) HTTPStatusError {
+	return httpStatusError{message: message, statusCode: statusCode}
 }
 
 func (drive *Drive) String() string {
@@ -210,16 +230,8 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 	}
 	defer res.Body.Close()
 
-	switch res.StatusCode {
-	case http.StatusNotFound:
-		return ErrorNotFound
-	case http.StatusTooManyRequests:
-		return ErrorTooManyRequests
-	default:
-	}
-
 	if res.StatusCode >= 400 {
-		return errors.Errorf(`failed to request "%s", got "%d"`, url, res.StatusCode)
+		return newHttpStatusError(fmt.Sprintf(`failed to request "%s", got "%d"`, url, res.StatusCode), res.StatusCode)
 	}
 
 	if response != nil {
