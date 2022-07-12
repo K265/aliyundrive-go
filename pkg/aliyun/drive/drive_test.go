@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,10 +48,36 @@ func TestIntegration(t *testing.T) {
 		info, err := fd.Stat()
 		require.NoError(t, err)
 		nodeId, err := fs.CreateFile(ctx, Node{Name: "rapid_upload.js", ParentId: childNodeId, Size: info.Size()}, fd)
+		defer fs.Remove(ctx, childNodeId)
 		require.NoError(t, err)
 		node, err := fs.Get(ctx, nodeId)
 		require.NoError(t, err)
 		fmt.Printf("node: %s\n", node)
+
+		shareID, sharePwd, expiration, err := fs.CreateShareLink(ctx, []Node{*node}, "1234", Hour*24)
+		require.NoError(t, err)
+		fmt.Printf("shareID: %s; sharePwd: %s; expire at: %s\n", shareID, sharePwd, expiration)
+		shareToken, err := fs.GetShareToken(ctx, sharePwd, shareID)
+		fmt.Printf("shareToken: %s", shareToken)
+		require.NoError(t, err)
+		_, _, _, fileID, err := fs.GetShareInfo(ctx, shareID)
+		require.NoError(t, err)
+		fmt.Println(fileID)
+		Expiration, Creator, err := fs.GetShareLinkByAnonymous(ctx, shareID)
+		require.NoError(t, err)
+		fmt.Printf("Expiration: %s; Creator: %s", Expiration, Creator)
+		time.Sleep(5 * time.Second)
+		SharedFile, nextMarker, err := fs.ListShareLinks(ctx)
+		require.NoError(t, err)
+		fmt.Printf("SharedFileList: %v; nextMarker: %s\n", SharedFile, nextMarker)
+		defer func() {
+			err := fs.CancelShareLink(ctx, shareID)
+			if err != nil {
+				panic(err)
+			}
+
+		}()
+
 		nodeId, err = fs.Move(ctx, nodeId, childNodeId, "rapid_upload.2.js")
 		require.NoError(t, err)
 		file, err := fs.Open(ctx, nodeId, map[string]string{})
