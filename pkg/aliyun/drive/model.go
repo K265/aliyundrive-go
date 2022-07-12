@@ -48,6 +48,11 @@ type ListNodes struct {
 	NextMarker string `json:"next_marker"`
 }
 
+type ListSharedFile struct {
+	Items      []SharedFile `json:"items"`
+	NextMarker string       `json:"next_marker"`
+}
+
 type User struct {
 	DriveId string `json:"default_drive_id"`
 }
@@ -68,6 +73,21 @@ type DownloadUrl struct {
 	Size       int64             `json:"size"`
 	StreamsUrl map[string]string `json:"streams_url,omitempty"`
 	Url        string            `json:"url"`
+}
+
+type SharedFile struct {
+	DriveID    string   `json:"drive_id,omitempty"`
+	Pwd        string   `json:"share_pwd,omitempty"`
+	ShareID    string   `json:"share_id"`
+	Creator    string   `json:"creator,omitempty"`
+	ShareName  string   `json:"share_name,omitempty"`
+	Expiration string   `json:"expiration"`
+	FileIDList []string `json:"file_id_list,omitempty"`
+}
+type ShareToken struct {
+	exp        string `json:"expire_time"`
+	expIn      int64  `json:"expires_in"`
+	shareToken string `json:"share_token"`
 }
 
 type FileProof struct {

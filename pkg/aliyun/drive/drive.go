@@ -26,6 +26,7 @@ const (
 	FileKind    = "file"
 	AnyKind     = "any"
 	MaxPartSize = 1024 * 1024 * 1024 // 1 GiB
+	Hour        = 60 * 60
 )
 
 const (
@@ -44,6 +45,13 @@ const (
 	apiTrash               = "https://api.aliyundrive.com/v2/recyclebin/trash"
 	apiDelete              = "https://api.aliyundrive.com/v3/file/delete"
 	apiBatch               = "https://api.aliyundrive.com/v2/batch"
+
+	apiCreateShareLink         = "https://api.aliyundrive.com/v2/share_link/create"
+	apiGetShareLinkByShareID   = "https://api.aliyundrive.com/v2/share_link/get"
+	apiListShareLink           = "https://api.aliyundrive.com/v2/share_link/list"
+	apiGetShareToken           = "https://api.aliyundrive.com/v2/share_link/get_share_token"
+	apiCancelShareLink         = "https://api.aliyundrive.com/v2/share_link/cancel"
+	apiGetShareLinkByAnonymous = "https://api.aliyundrive.com/v2/share_link/get_by_anonymous"
 
 	fakeUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.77 Safari/537.36"
 )
@@ -87,6 +95,13 @@ type Fs interface {
 	Copy(ctx context.Context, nodeId string, dstParentNodeId string, dstName string) (nodeIdOut string, err error)
 	CreateFolderRecursively(ctx context.Context, fullPath string) (nodeIdOut string, err error)
 	Update(ctx context.Context, node Node) (nodeIdOut string, err error)
+
+	CreateShareLink(ctx context.Context, node []Node, pwd string, expiresIn int64) (ShareID string, SharePwd string, Expiration string, err error)
+	ListShareLinks(ctx context.Context) (items []SharedFile, nextMarker string, err error)
+	GetShareInfo(ctx context.Context, shareID string) (ShareID string, Pwd string, Expiration string, FileIDList []string, err error)
+	GetShareToken(ctx context.Context, pwd string, shareID string) (shareToken string, error error)
+	CancelShareLink(ctx context.Context, shareID string) error
+	GetShareLinkByAnonymous(ctx context.Context, shareID string) (Expiration string, Creator string, err error)
 }
 
 type Config struct {
@@ -769,4 +784,113 @@ func (drive *Drive) Update(ctx context.Context, node Node) (string, error) {
 		return "", errors.Wrap(err, "failed to post update request")
 	}
 	return result.NodeId, nil
+}
+
+// create share link, para: ctx, file node list, pwd, expiresIn(second)
+// return shareID, pwd, expiration
+func (drive *Drive) CreateShareLink(ctx context.Context, node []Node, pwd string, expiresIn int64) (string, string, string, error) {
+	var NodeIDs []string
+	for _, node := range node {
+		NodeIDs = append(NodeIDs, node.NodeId)
+	}
+	expiration := time.Unix(time.Now().Unix()+expiresIn, 0).Format(time.RFC3339Nano)
+	expiration = expiration[0:19] + ".999Z"
+
+	body := map[string]interface{}{
+		"share_pwd":    pwd,
+		"drive_id":     drive.driveId,
+		"file_id_list": NodeIDs,
+		"expiration":   expiration,
+		//expiration: A RFC3339 style: 2022-07-02T15:04:05.923Z,
+	}
+	var result SharedFile
+	err := drive.jsonRequest(ctx, "POST", apiCreateShareLink, &body, &result)
+	if err != nil {
+		return "", "", "", errors.Wrap(err, "failed to post create share link request")
+	}
+	return result.ShareID, result.Pwd, result.Expiration, nil
+}
+
+// get share info by shareID
+// return value may vary
+func (drive *Drive) GetShareInfo(ctx context.Context, shareID string) (string, string, string, []string, error) {
+	body := map[string]string{
+		"share_id": shareID,
+	}
+	var result SharedFile
+	err := drive.jsonRequest(ctx, "POST", apiGetShareLinkByShareID, &body, &result)
+	if err != nil {
+		return "", "", "", []string{}, errors.Wrap(err, "failed to get share info by shareID")
+	}
+	return result.ShareID, result.Pwd, result.Expiration, result.FileIDList[:], nil
+}
+
+// get share_token using pwd and shareID
+// How to use share_token: https://help.aliyun.com/document_detail/397603.html
+func (drive *Drive) GetShareToken(ctx context.Context, pwd string, shareID string) (shareToken string, error error) {
+	body := make(map[string]string)
+	if pwd == "" {
+		body = map[string]string{
+			"share_id": shareID,
+		}
+	} else {
+		body = map[string]string{
+			"share_id":  shareID,
+			"share_pwd": pwd,
+		}
+	}
+	var result ShareToken
+	err := drive.jsonRequest(ctx, "POST", apiGetShareToken, &body, &result)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to get share_token")
+	}
+	return result.shareToken, nil
+}
+
+// cancel shareLink by shareID
+func (drive *Drive) CancelShareLink(ctx context.Context, shareID string) error {
+	body := map[string]string{
+		"share_id": shareID,
+	}
+	err := drive.jsonRequest(ctx, "POST", apiCancelShareLink, &body, nil) // No need to parse json response, so nil
+	if err != nil {
+		return errors.Wrap(err, "failed to post cancel share link request")
+	}
+	return nil
+}
+
+func (drive *Drive) ListShareLinks(ctx context.Context) ([]SharedFile, string, error) {
+	body := map[string]interface{}{
+		"limit":             200,
+		"order_by":          "share_name",
+		"order_direction":   "ASC",
+		"include_cancelled": false,
+	}
+	var sharedFiles []SharedFile
+	var lSharedFiles *ListSharedFile
+	for {
+		if lSharedFiles != nil && lSharedFiles.NextMarker == "" {
+			break
+		}
+		err := drive.jsonRequest(ctx, "POST", apiListShareLink, &body, &lSharedFiles)
+		if err != nil {
+			return nil, "", errors.Wrap(err, "failed to get share links")
+		}
+		sharedFiles = append(sharedFiles, lSharedFiles.Items...)
+		body["marker"] = lSharedFiles.NextMarker
+	}
+
+	return sharedFiles, lSharedFiles.NextMarker, nil
+}
+
+func (drive *Drive) GetShareLinkByAnonymous(ctx context.Context, shareID string) (Expiration string, Creator string, err error) {
+	body := map[string]string{
+		"share_id": shareID,
+	}
+	var result SharedFile
+	errs := drive.jsonRequest(ctx, "POST", apiGetShareLinkByAnonymous, &body, &result)
+	if errs != nil {
+		return "", "", errors.Wrap(err, "failed to get share link by shareID")
+	}
+	return result.Expiration, result.Creator, nil
 }
