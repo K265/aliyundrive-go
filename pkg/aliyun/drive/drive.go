@@ -62,11 +62,17 @@ var (
 	ErrorMissingFields  = errors.New("required fields: ParentId, Name")
 )
 
+type Pager interface {
+	Next() bool
+	Nodes(ctx context.Context) ([]Node, error)
+}
+
 type Fs interface {
 	About(ctx context.Context) (*PersonalSpaceInfo, error)
 	Get(ctx context.Context, nodeId string) (*Node, error)
 	GetByPath(ctx context.Context, fullPath string, kind string) (*Node, error)
-	List(ctx context.Context, nodeId string) ([]Node, error)
+	List(nodeId string) Pager
+	ListAll(ctx context.Context, nodeId string) ([]Node, error)
 
 	// CreateFolder creates a folder to aliyun drive.
 	//
@@ -140,6 +146,12 @@ type httpStatusError struct {
 	statusCode int
 }
 
+type pager struct {
+	drive  *Drive
+	param  map[string]interface{}
+	lNodes *ListNodes
+}
+
 func (err httpStatusError) Error() string {
 	return err.message
 }
@@ -150,6 +162,24 @@ func (err httpStatusError) StatusCode() int {
 
 func newHttpStatusError(message string, statusCode int) HTTPStatusError {
 	return httpStatusError{message: message, statusCode: statusCode}
+}
+
+func (p *pager) Next() bool {
+	if p.drive == nil {
+		return false
+	}
+
+	return p.lNodes == nil || p.lNodes.NextMarker != ""
+}
+
+func (p *pager) Nodes(ctx context.Context) ([]Node, error) {
+	err := p.drive.jsonRequest(ctx, "POST", apiList, &p.param, &p.lNodes)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	p.param["marker"] = p.lNodes.NextMarker
+	return p.lNodes.Items, nil
 }
 
 func (drive *Drive) String() string {
@@ -315,34 +345,8 @@ func normalizePath(s string) string {
 	return s
 }
 
-func (drive *Drive) listNodes(ctx context.Context, nodeId string) ([]Node, error) {
-	data := map[string]interface{}{
-		"drive_id":       drive.driveId,
-		"parent_file_id": nodeId,
-		"limit":          200,
-		"marker":         "",
-	}
-	var nodes []Node
-	var lNodes *ListNodes
-	for {
-		if lNodes != nil && lNodes.NextMarker == "" {
-			break
-		}
-
-		err := drive.jsonRequest(ctx, "POST", apiList, &data, &lNodes)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-
-		nodes = append(nodes, lNodes.Items...)
-		data["marker"] = lNodes.NextMarker
-	}
-
-	return nodes, nil
-}
-
 func (drive *Drive) findNameNode(ctx context.Context, nodeId string, name string, kind string) (*Node, error) {
-	nodes, err := drive.listNodes(ctx, nodeId)
+	nodes, err := drive.ListAll(ctx, nodeId)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -421,8 +425,29 @@ func (drive *Drive) About(ctx context.Context) (*PersonalSpaceInfo, error) {
 	return &result.PersonalSpaceInfo, nil
 }
 
-func (drive *Drive) List(ctx context.Context, nodeId string) ([]Node, error) {
-	return drive.listNodes(ctx, nodeId)
+func (drive *Drive) List(nodeId string) Pager {
+	param := map[string]interface{}{
+		"drive_id":       drive.driveId,
+		"parent_file_id": nodeId,
+		"limit":          200,
+		"marker":         "",
+	}
+	p := &pager{param: param, drive: drive}
+	return p
+}
+
+func (drive *Drive) ListAll(ctx context.Context, nodeId string) ([]Node, error) {
+	p := drive.List(nodeId)
+	var nodes []Node
+	for p.Next() {
+		data, err := p.Nodes(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		nodes = append(nodes, data...)
+	}
+	return nodes, nil
 }
 
 func createCheck(node Node) error {
