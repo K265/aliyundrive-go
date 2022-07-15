@@ -18,13 +18,15 @@ see <https://github.com/K265/aliyundrive-go/blob/main/pkg/aliyun/drive/drive_tes
 
 - [x] album support
 
-## Thanks
+## Acknowledgements
 
 Thanks for your code contributions:
 
 [@SiHuan](https://github.com/sihuan)
 
 [@Jim Ma](https://github.com/jim3ma)
+
+[@STX5](https://github.com/STX5)
 
 ## License
 
