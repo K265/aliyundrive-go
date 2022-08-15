@@ -60,13 +60,7 @@ var (
 	ErrorLivpUpload     = errors.New("uploading .livp to album is not supported")
 	ErrorAlreadyExisted = errors.New("already existed")
 	ErrorMissingFields  = errors.New("required fields: ParentId, Name")
-
-	UseInternalUrl = false
 )
-
-func init() {
-	UseInternalUrl = os.Getenv("ALIYUN_DRIVE_USE_INTERNAL_URL") == "true"
-}
 
 type Pager interface {
 	Next() bool
@@ -121,6 +115,7 @@ type Config struct {
 	IsAlbum        bool
 	HttpClient     *http.Client
 	OnRefreshToken func(refreshToken string)
+	UseInternalUrl bool
 }
 
 func (config Config) String() string {
@@ -555,7 +550,7 @@ func (drive *Drive) Open(ctx context.Context, nodeId string, headers map[string]
 	}
 
 	url := downloadUrl.Url
-	if UseInternalUrl {
+	if drive.config.UseInternalUrl {
 		url = downloadUrl.InternalUrl
 	}
 	if url != "" {
@@ -708,7 +703,7 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, node Node, in io.Re
 	for _, part := range proofResult.PartInfoList {
 		partReader := io.LimitReader(in, MaxPartSize)
 		uploadUrl := part.UploadUrl
-		if UseInternalUrl {
+		if drive.config.UseInternalUrl {
 			uploadUrl = part.InternalUploadURL
 		}
 		req, err := http.NewRequestWithContext(ctx, "PUT", uploadUrl, partReader)
