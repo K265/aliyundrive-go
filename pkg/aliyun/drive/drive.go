@@ -115,6 +115,7 @@ type Config struct {
 	IsAlbum        bool
 	HttpClient     *http.Client
 	OnRefreshToken func(refreshToken string)
+	UseInternalUrl bool
 }
 
 func (config Config) String() string {
@@ -549,6 +550,9 @@ func (drive *Drive) Open(ctx context.Context, nodeId string, headers map[string]
 	}
 
 	url := downloadUrl.Url
+	if drive.config.UseInternalUrl {
+		url = downloadUrl.InternalUrl
+	}
 	if url != "" {
 		res, err := drive.request(ctx, "GET", url, headers, nil)
 		if err != nil {
@@ -698,7 +702,11 @@ func (drive *Drive) CreateFileWithProof(ctx context.Context, node Node, in io.Re
 
 	for _, part := range proofResult.PartInfoList {
 		partReader := io.LimitReader(in, MaxPartSize)
-		req, err := http.NewRequestWithContext(ctx, "PUT", part.UploadUrl, partReader)
+		uploadUrl := part.UploadUrl
+		if drive.config.UseInternalUrl {
+			uploadUrl = part.InternalUploadURL
+		}
+		req, err := http.NewRequestWithContext(ctx, "PUT", uploadUrl, partReader)
 		if err != nil {
 			return "", errors.Wrap(err, "failed to create upload request")
 		}

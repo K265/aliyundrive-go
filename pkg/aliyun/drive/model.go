@@ -70,9 +70,10 @@ type Token struct {
 }
 
 type DownloadUrl struct {
-	Size       int64             `json:"size"`
-	StreamsUrl map[string]string `json:"streams_url,omitempty"`
-	Url        string            `json:"url"`
+	Size        int64             `json:"size"`
+	StreamsUrl  map[string]string `json:"streams_url,omitempty"`
+	Url         string            `json:"url"`
+	InternalUrl string            `json:"internal_url"`
 }
 
 type SharedFile struct {
@@ -106,8 +107,9 @@ type FileProof struct {
 }
 
 type PartInfo struct {
-	PartNumber int    `json:"part_number"`
-	UploadUrl  string `json:"upload_url"`
+	PartNumber        int    `json:"part_number"`
+	UploadUrl         string `json:"upload_url"`
+	InternalUploadURL string `json:"internal_upload_url"`
 }
 
 type ProofResult struct {
