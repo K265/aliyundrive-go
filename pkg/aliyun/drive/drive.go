@@ -5,12 +5,15 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/big"
 	"net/http"
 	"os"
 	"path"
@@ -90,7 +93,7 @@ type Fs interface {
 	//
 	// may return ErrorMissingFields if required fields are missing.
 	CreateFile(ctx context.Context, node Node, in io.Reader) (nodeIdOut string, err error)
-	CalcProof(fileSize int64, in *os.File) (file *os.File, proof string, err error)
+	CalcProof(fileSize int64, in *os.File) (proof string, err error)
 
 	// CreateFileWithProof puts a file to aliyun drive.
 	//
@@ -608,22 +611,31 @@ func CalcSha1(in *os.File) (*os.File, string, error) {
 	return in, fmt.Sprintf("%X", h.Sum(nil)), nil
 }
 
-func calcProof(accessToken string, fileSize int64, in *os.File) (*os.File, string, error) {
-	start := CalcProofOffset(accessToken, fileSize)
-	sret, _ := in.Seek(start, 0)
-	if sret != start {
-		_, _ = in.Seek(0, 0)
-		return in, "", errors.Errorf("failed to seek file to %d", start)
+func calcProof(accessToken string, fileSize int64, in io.ReaderAt) (string, error) {
+	// from https://github.com/alist-org/alist/blob/09564102e7ea4336ea6222e0381080a3a8273b21/drivers/aliyundrive/driver.go#L227
+	/*
+		var n = e.access_token，
+		r = new BigNumber('0x'.concat(md5(n).slice(0, 16)))，
+		i = new BigNumber(t.file.size)，
+		o = i ? r.mod(i) : new gt.BigNumber(0);
+		(t.file.slice(o.toNumber(), Math.min(o.plus(8).toNumber(), t.file.size)))
+	*/
+	h := md5.New()
+	h.Write([]byte(accessToken))
+	md5String := hex.EncodeToString(h.Sum(nil))[:16]
+	r, _ := new(big.Int).SetString(md5String, 16)
+	i := new(big.Int).SetInt64(fileSize)
+	o := new(big.Int).SetInt64(0)
+	if fileSize > 0 {
+		o = r.Mod(r, i)
 	}
-
 	buf := make([]byte, 8)
-	_, _ = in.Read(buf)
-	proofCode := base64.StdEncoding.EncodeToString(buf)
-	_, _ = in.Seek(0, 0)
-	return in, proofCode, nil
+	n, _ := io.NewSectionReader(in, o.Int64(), 8).Read(buf[:8])
+	proof := base64.StdEncoding.EncodeToString(buf[:n])
+	return proof, nil
 }
 
-func (drive *Drive) CalcProof(fileSize int64, in *os.File) (*os.File, string, error) {
+func (drive *Drive) CalcProof(fileSize int64, in *os.File) (string, error) {
 	return calcProof(drive.accessToken, fileSize, in)
 }
 
@@ -634,7 +646,7 @@ func (drive *Drive) CreateFile(ctx context.Context, node Node, in io.Reader) (st
 	fin, ok := in.(*os.File)
 	if ok {
 		in, sha1Code, _ = CalcSha1(fin)
-		in, proofCode, _ = drive.CalcProof(node.Size, fin)
+		proofCode, _ = drive.CalcProof(node.Size, fin)
 	}
 
 	return drive.CreateFileWithProof(ctx, node, in, sha1Code, proofCode)
@@ -807,7 +819,7 @@ func (drive *Drive) Update(ctx context.Context, node Node) (string, error) {
 	body := map[string]string{
 		"drive_id": drive.driveId,
 		"file_id":  node.NodeId,
-		//"check_name_mode": "refuse",
+		// "check_name_mode": "refuse",
 		"name": node.Name,
 		"meta": node.Meta,
 	}
@@ -834,7 +846,7 @@ func (drive *Drive) CreateShareLink(ctx context.Context, node []Node, pwd string
 		"drive_id":     drive.driveId,
 		"file_id_list": NodeIDs,
 		"expiration":   expiration,
-		//expiration: A RFC3339 style: 2022-07-02T15:04:05.923Z,
+		// expiration: A RFC3339 style: 2022-07-02T15:04:05.923Z,
 	}
 	var result SharedFile
 	err := drive.jsonRequest(ctx, "POST", apiCreateShareLink, &body, &result)

@@ -28,6 +28,10 @@ Thanks for your code contributions:
 
 [@STX5](https://github.com/STX5)
 
+Thanks for the rapid upload implementation:
+
+<https://github.com/alist-org/alist/blob/09564102e7ea4336ea6222e0381080a3a8273b21/drivers/aliyundrive/driver.go#L227>
+
 ## License
 
 This is free software under the terms of MIT the license (check the [LICENSE file](/LICENSE) included in this package).

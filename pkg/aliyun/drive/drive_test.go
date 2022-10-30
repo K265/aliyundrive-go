@@ -107,23 +107,26 @@ func TestIntegration(t *testing.T) {
 }
 
 func TestSha1(t *testing.T) {
-	fd, err := os.Open("1.mp3")
+	fd, err := os.Open("../../../assets/rapid_upload.js")
 	require.NoError(t, err)
 	rd, s, err := CalcSha1(fd)
-	assert.Equal(t, "462FD5A7D4B12EE8A88CF0881D811BD224DB79FE", s)
+	assert.Equal(t, "3F4D82D88A0624EFD46D7A5FD06BE2D430C00301", s)
 	buf := make([]byte, 4)
 	_, _ = rd.Read(buf)
-	assert.Equal(t, []byte{0x49, 0x44, 0x33, 0x03}, buf)
+	assert.Equal(t, []byte{0x66, 0x75, 0x6e, 0x63}, buf)
 }
 
 func TestCalcProof(t *testing.T) {
-	fd, err := os.Open("1.mp3")
-	accessToken := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
-	fileSize := int64(4087117)
+	fd, err := os.Open("../../../assets/rapid_upload.js")
 	require.NoError(t, err)
-	rd, proofCode, err := calcProof(accessToken, fileSize, fd)
-	assert.Equal(t, "dj66UE3TEFM=", proofCode)
+	fi, err := fd.Stat()
+	require.NoError(t, err)
+	fileSize := fi.Size()
+	accessToken := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+	require.NoError(t, err)
+	proofCode, err := calcProof(accessToken, fileSize, fd)
+	assert.Equal(t, "Cn0KCmZ1bmM=", proofCode)
 	buf2 := make([]byte, 4)
-	_, _ = rd.Read(buf2)
-	assert.Equal(t, []byte{0x49, 0x44, 0x33, 0x03}, buf2)
+	_, _ = fd.Read(buf2)
+	assert.Equal(t, []byte{0x66, 0x75, 0x6e, 0x63}, buf2)
 }
