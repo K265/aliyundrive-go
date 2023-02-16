@@ -5,8 +5,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dustinxie/ecc"
 	"github.com/pkg/errors"
 )
 
@@ -37,6 +42,7 @@ const (
 	apiPersonalInfo        = "https://api.aliyundrive.com/v2/databox/get_personal_info"
 	apiList                = "https://api.aliyundrive.com/v2/file/list"
 	apiCreate              = "https://api.aliyundrive.com/v2/file/create"
+	apiCreateDeviceSession = "https://api.aliyundrive.com/users/v1/users/device/create_session"
 	apiUpdate              = "https://api.aliyundrive.com/v2/file/update"
 	apiMove                = "https://api.aliyundrive.com/v2/file/move"
 	apiCopy                = "https://api.aliyundrive.com/v2/file/copy"
@@ -45,6 +51,7 @@ const (
 	apiGet                 = "https://api.aliyundrive.com/v2/file/get"
 	apiGetByPath           = "https://api.aliyundrive.com/v2/file/get_by_path"
 	apiCreateWithFolder    = "https://api.aliyundrive.com/adrive/v2/file/createWithFolders"
+	apiRenewDeviceSession  = "https://api.aliyundrive.com/users/v1/users/device/renew_session"
 	apiTrash               = "https://api.aliyundrive.com/v2/recyclebin/trash"
 	apiDelete              = "https://api.aliyundrive.com/v3/file/delete"
 	apiBatch               = "https://api.aliyundrive.com/v2/batch"
@@ -56,7 +63,8 @@ const (
 	apiCancelShareLink         = "https://api.aliyundrive.com/v2/share_link/cancel"
 	apiGetShareLinkByAnonymous = "https://api.aliyundrive.com/v2/share_link/get_by_anonymous"
 
-	fakeUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.77 Safari/537.36"
+	fakeUA                     = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.77 Safari/537.36"
+	deviceSessionExpireSeconds = 300 // 5 min
 )
 
 var (
@@ -114,11 +122,12 @@ type Fs interface {
 }
 
 type Config struct {
-	RefreshToken   string
-	IsAlbum        bool
+	RefreshToken   string `json:"refresh_token"`
+	DeviceId       string `json:"device_id"`
+	IsAlbum        bool   `json:"is_album,omitempty"`
 	HttpClient     *http.Client
 	OnRefreshToken func(refreshToken string)
-	UseInternalUrl bool
+	UseInternalUrl bool `json:"use_internal_url,omitempty"`
 }
 
 func (config Config) String() string {
@@ -127,6 +136,7 @@ func (config Config) String() string {
 
 type Drive struct {
 	token
+	deviceSession
 	config     Config
 	driveId    string
 	rootId     string
@@ -138,6 +148,15 @@ type Drive struct {
 type token struct {
 	accessToken string
 	expireAt    int64
+}
+
+type deviceSession struct {
+	userId                  string
+	deviceSessionExpireAt   int64
+	deviceSessionPrivateKey *ecdsa.PrivateKey
+	nonce                   int
+	signature               string
+	deviceSessionMutex      sync.Mutex
 }
 
 type HTTPStatusError interface {
@@ -190,6 +209,26 @@ func (drive *Drive) String() string {
 	return fmt.Sprintf("AliyunDrive{driveId: %s}", drive.driveId)
 }
 
+// https://github.com/alist-org/alist/pull/3390
+// https://github.com/foxxorcat/alist/tree/fix_aliyundriver
+func (drive *Drive) sign() error {
+	if drive.deviceSessionPrivateKey == nil {
+		return errors.Errorf("failed to sign: deviceSessionPrivateKey is nil")
+	}
+
+	drive.nonce++
+	appId := "5dde4e1bdf9e4966b387ba58f4b3fdc3"
+	s := fmt.Sprintf("%s:%s:%s:%d", appId, drive.config.DeviceId, drive.userId, drive.nonce)
+	hash := sha256.Sum256([]byte(s))
+	data, err := ecc.SignBytes(drive.deviceSessionPrivateKey, hash[:], ecc.RecID|ecc.LowerS)
+	if err != nil {
+		return err
+	}
+
+	drive.signature = hex.EncodeToString(data)
+	return nil
+}
+
 func (drive *Drive) request(ctx context.Context, method, url string, headers map[string]string, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
@@ -210,6 +249,50 @@ func (drive *Drive) request(ctx context.Context, method, url string, headers map
 	return res, nil
 }
 
+func (drive *Drive) jsonRequestNoExpireCheck(ctx context.Context, method, url string, headers map[string]string, request interface{}, response interface{}) error {
+	if headers == nil {
+		headers = map[string]string{
+			"content-type":  "application/json;charset=UTF-8",
+			"authorization": "Bearer " + drive.accessToken,
+			"x-device-id":   drive.config.DeviceId,
+			"X-Signature":   drive.signature,
+		}
+	}
+
+	var bodyBytes []byte
+	if request != nil {
+		b, err := json.Marshal(request)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		bodyBytes = b
+	}
+
+	res, err := drive.request(ctx, method, url, headers, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer res.Body.Close()
+
+	b, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	if res.StatusCode >= 400 {
+		return newHttpStatusError(fmt.Sprintf(`failed to request "%s", got "%d", %s`, url, res.StatusCode, string(b)), res.StatusCode)
+	}
+
+	if response != nil {
+		err = json.Unmarshal(b, &response)
+		if err != nil {
+			return errors.Wrapf(err, `failed to parse response "%s"`, string(b))
+		}
+	}
+
+	return nil
+}
+
 func (drive *Drive) refreshToken(ctx context.Context) error {
 	headers := map[string]string{
 		"content-type": "application/json;charset=UTF-8",
@@ -218,28 +301,9 @@ func (drive *Drive) refreshToken(ctx context.Context) error {
 		"refresh_token": drive.config.RefreshToken,
 		"grant_type":    "refresh_token",
 	}
-
-	var body io.Reader
-	b, err := json.Marshal(&data)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	body = bytes.NewBuffer(b)
-	res, err := drive.request(ctx, "POST", apiRefreshToken, headers, body)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer res.Body.Close()
-
 	var token Token
-	b, err = ioutil.ReadAll(res.Body)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	err = json.Unmarshal(b, &token)
-	if err != nil {
-		return errors.Wrapf(err, `failed to parse response "%s"`, string(b))
+	if err := drive.jsonRequestNoExpireCheck(ctx, "POST", apiRefreshToken, headers, &data, &token); err != nil {
+		return err
 	}
 
 	drive.accessToken = token.AccessToken
@@ -259,41 +323,73 @@ func (drive *Drive) jsonRequest(ctx context.Context, method, url string, request
 			return errors.WithStack(err)
 		}
 	}
-	headers := map[string]string{
-		"content-type":  "application/json;charset=UTF-8",
-		"authorization": "Bearer " + drive.accessToken,
-	}
 
-	var bodyBytes []byte
-	if request != nil {
-		b, err := json.Marshal(request)
-		if err != nil {
-			return errors.WithStack(err)
+	if drive.deviceSessionExpireAt < time.Now().Unix() {
+		if err := drive.createDeviceSession(ctx); err != nil {
+			return err
 		}
-		bodyBytes = b
 	}
 
-	res, err := drive.request(ctx, method, url, headers, bytes.NewBuffer(bodyBytes))
+	return drive.jsonRequestNoExpireCheck(ctx, method, url, nil, request, response)
+}
+
+// https://github.com/alist-org/alist/issues/3375
+func (drive *Drive) createDeviceSession(ctx context.Context) error {
+	drive.deviceSessionMutex.Lock()
+	defer drive.deviceSessionMutex.Unlock()
+
+	key, err := ecdsa.GenerateKey(ecc.P256k1(), rand.Reader)
 	if err != nil {
-		return errors.WithStack(err)
+		return err
 	}
-	defer res.Body.Close()
-
-	if res.StatusCode >= 400 {
-		return newHttpStatusError(fmt.Sprintf(`failed to request "%s", got "%d"`, url, res.StatusCode), res.StatusCode)
-	}
-
-	if response != nil {
-		b, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		err = json.Unmarshal(b, &response)
-		if err != nil {
-			return errors.Wrapf(err, `failed to parse response "%s"`, string(b))
-		}
+	drive.deviceSessionPrivateKey = key
+	drive.nonce = -1
+	if err := drive.sign(); err != nil {
+		return err
 	}
 
+	pubKey := key.PublicKey
+	b := elliptic.Marshal(pubKey.Curve, pubKey.X, pubKey.Y)
+	s := hex.EncodeToString(b)
+	data := map[string]interface{}{
+		"deviceName": "Chrome",
+		"modelName":  "Windows",
+		"pubKey":     s,
+	}
+	var result CreateDeviceSessionResult
+	err = drive.jsonRequestNoExpireCheck(ctx, "POST", apiCreateDeviceSession, nil, &data, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.Success {
+		return errors.Errorf("failed to create device session")
+	}
+
+	drive.deviceSessionExpireAt = time.Now().Unix() + deviceSessionExpireSeconds
+	return nil
+}
+
+// TODO: fix renew_session device session signature error
+func (drive *Drive) renewDeviceSession(ctx context.Context) error {
+	drive.deviceSessionMutex.Lock()
+	defer drive.deviceSessionMutex.Unlock()
+
+	if err := drive.sign(); err != nil {
+		return err
+	}
+
+	var result CreateDeviceSessionResult
+	err := drive.jsonRequestNoExpireCheck(ctx, "POST", apiRenewDeviceSession, nil, map[string]string{}, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.Success {
+		return errors.Wrapf(err, "failed to renew device session")
+	}
+
+	drive.deviceSessionExpireAt = time.Now().Unix() + deviceSessionExpireSeconds
 	return nil
 }
 
@@ -303,8 +399,27 @@ func NewFs(ctx context.Context, config *Config) (Fs, error) {
 		httpClient: config.HttpClient,
 	}
 
+	if drive.httpClient == nil {
+		drive.httpClient = &http.Client{}
+	}
+
 	// get driveId
-	driveId := ""
+	var user User
+	data := map[string]string{}
+	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/user/get", &data, &user)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to get driveId")
+	}
+
+	drive.driveId = user.DriveId
+	drive.userId = user.UserId
+	drive.rootId = "root"
+	drive.rootNode = Node{
+		NodeId: "root",
+		Type:   "folder",
+		Name:   "root",
+	}
+
 	if config.IsAlbum {
 		var albumInfo AlbumInfo
 		data := map[string]string{}
@@ -313,24 +428,7 @@ func NewFs(ctx context.Context, config *Config) (Fs, error) {
 			return nil, errors.Wrap(err, "failed to get driveId")
 		}
 
-		driveId = albumInfo.Data.DriveId
-	} else {
-		var user User
-		data := map[string]string{}
-		err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/user/get", &data, &user)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to get driveId")
-		}
-
-		driveId = user.DriveId
-	}
-
-	drive.driveId = driveId
-	drive.rootId = "root"
-	drive.rootNode = Node{
-		NodeId: "root",
-		Type:   "folder",
-		Name:   "root",
+		drive.driveId = albumInfo.Data.DriveId
 	}
 
 	return drive, nil

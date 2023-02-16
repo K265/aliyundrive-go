@@ -55,6 +55,7 @@ type ListSharedFile struct {
 
 type User struct {
 	DriveId string `json:"default_drive_id"`
+	UserId  string `json:"user_id"`
 }
 
 type AlbumInfo struct {
@@ -128,4 +129,8 @@ type PersonalSpaceInfo struct {
 
 type PersonalInfo struct {
 	PersonalSpaceInfo PersonalSpaceInfo `json:"personal_space_info"`
+}
+
+type CreateDeviceSessionResult struct {
+	Success bool `json:"success"`
 }

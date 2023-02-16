@@ -2,9 +2,9 @@ package drive
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -16,19 +16,13 @@ import (
 var fs Fs
 
 func setup(t *testing.T) context.Context {
-	token := ""
 	cb, err := ioutil.ReadFile("../../../.config")
-	if err == nil {
-		token = string(cb)
-	}
-	config := &Config{
-		RefreshToken: token,
-		IsAlbum:      false,
-		HttpClient:   &http.Client{},
-	}
-
+	require.NoError(t, err)
+	var config Config
+	err = json.Unmarshal(cb, &config)
+	require.NoError(t, err)
 	ctx := context.Background()
-	fs, err = NewFs(ctx, config)
+	fs, err = NewFs(ctx, &config)
 	require.NoError(t, err)
 	return ctx
 }
