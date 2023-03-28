@@ -63,7 +63,6 @@ const (
 	apiCancelShareLink         = "https://api.aliyundrive.com/v2/share_link/cancel"
 	apiGetShareLinkByAnonymous = "https://api.aliyundrive.com/v2/share_link/get_by_anonymous"
 
-	fakeUA                     = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.77 Safari/537.36"
 	deviceSessionExpireSeconds = 300 // 5 min
 )
 
@@ -236,7 +235,6 @@ func (drive *Drive) request(ctx context.Context, method, url string, headers map
 	}
 
 	req.Header.Set("Referer", "https://www.aliyundrive.com/")
-	req.Header.Set("User-Agent", fakeUA)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
