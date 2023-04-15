@@ -42,7 +42,6 @@ func TestIntegration(t *testing.T) {
 		info, err := fd.Stat()
 		require.NoError(t, err)
 		nodeId, err := fs.CreateFile(ctx, Node{Name: "rapid_upload.js", ParentId: childNodeId, Size: info.Size()}, fd)
-		defer fs.Remove(ctx, childNodeId)
 		require.NoError(t, err)
 		lNodes, err := fs.ListAll(ctx, childNodeId)
 		require.NoError(t, err)
@@ -69,11 +68,12 @@ func TestIntegration(t *testing.T) {
 		fmt.Printf("SharedFileList: %v; nextMarker: %s\n", SharedFile, nextMarker)
 		defer func() {
 			err := fs.CancelShareLink(ctx, shareID)
-			if err != nil {
-				panic(err)
-			}
-
+			require.NoError(t, err)
 		}()
+
+		nodes, err := fs.Search(ctx, "rapid_upload.js")
+		require.NoError(t, err)
+		fmt.Printf("Search result: %s\n", nodes)
 
 		nodeId, err = fs.Move(ctx, nodeId, childNodeId, "rapid_upload.2.js")
 		require.NoError(t, err)

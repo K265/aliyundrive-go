@@ -40,10 +40,13 @@ const (
 const (
 	apiRefreshToken        = "https://auth.aliyundrive.com/v2/account/token"
 	apiPersonalInfo        = "https://api.aliyundrive.com/v2/databox/get_personal_info"
-	apiList                = "https://api.aliyundrive.com/v2/file/list"
+	apiList                = "https://api.aliyundrive.com/adrive/v3/file/list"
 	apiCreate              = "https://api.aliyundrive.com/v2/file/create"
 	apiCreateDeviceSession = "https://api.aliyundrive.com/users/v1/users/device/create_session"
+	apiGetDownloadUrl      = "https://api.aliyundrive.com/v2/file/get_download_url"
+	apiSearch              = "https://api.aliyundrive.com/adrive/v3/file/search"
 	apiUpdate              = "https://api.aliyundrive.com/v2/file/update"
+	apiUserGet             = "https://api.aliyundrive.com/adrive/v2/user/get"
 	apiMove                = "https://api.aliyundrive.com/v2/file/move"
 	apiCopy                = "https://api.aliyundrive.com/v2/file/copy"
 	apiCreateFileWithProof = "https://api.aliyundrive.com/v2/file/create_with_proof"
@@ -118,6 +121,7 @@ type Fs interface {
 	GetShareToken(ctx context.Context, pwd string, shareID string) (shareToken string, error error)
 	CancelShareLink(ctx context.Context, shareID string) error
 	GetShareLinkByAnonymous(ctx context.Context, shareID string) (Expiration string, Creator string, err error)
+	Search(ctx context.Context, name string) ([]Node, error)
 }
 
 type Config struct {
@@ -404,7 +408,7 @@ func NewFs(ctx context.Context, config *Config) (Fs, error) {
 	// get driveId
 	var user User
 	data := map[string]string{}
-	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/user/get", &data, &user)
+	err := drive.jsonRequest(ctx, "POST", apiUserGet, &data, &user)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get driveId")
 	}
@@ -572,7 +576,7 @@ func (drive *Drive) CreateFolder(ctx context.Context, node Node) (string, error)
 		"meta":            node.Meta,
 	}
 	var result NodeId
-	err := drive.jsonRequest(ctx, "POST", apiCreate, &body, &result)
+	err := drive.jsonRequest(ctx, "POST", apiCreateWithFolder, &body, &result)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to post create folder request")
 	}
@@ -631,7 +635,7 @@ func (drive *Drive) getDownloadUrl(ctx context.Context, nodeId string) (*Downloa
 		"drive_id": drive.driveId,
 		"file_id":  nodeId,
 	}
-	err := drive.jsonRequest(ctx, "POST", "https://api.aliyundrive.com/v2/file/get_download_url", &data, &detail)
+	err := drive.jsonRequest(ctx, "POST", apiGetDownloadUrl, &data, &detail)
 	if err != nil {
 		return nil, errors.Wrapf(err, `failed to get node detail of "%s"`, nodeId)
 	}
@@ -1034,4 +1038,20 @@ func (drive *Drive) GetShareLinkByAnonymous(ctx context.Context, shareID string)
 		return "", "", errors.Wrap(err, "failed to get share link by shareID")
 	}
 	return result.Expiration, result.Creator, nil
+}
+
+func (drive *Drive) Search(ctx context.Context, name string) ([]Node, error) {
+	body := map[string]interface{}{
+		"drive_id": drive.driveId,
+		"limit":    100,
+		"order_by": "name ASC",
+		"query":    fmt.Sprintf(`name = "%s"`, name),
+	}
+	var result ListNodes
+	err := drive.jsonRequest(ctx, "POST", apiSearch, &body, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Items, err
 }
