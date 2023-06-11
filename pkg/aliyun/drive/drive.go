@@ -95,7 +95,7 @@ type Fs interface {
 	CreateFolder(ctx context.Context, node Node) (nodeIdOut string, err error)
 	Move(ctx context.Context, nodeId string, dstParentNodeId string, dstName string) (nodeIdOut string, err error)
 	Remove(ctx context.Context, nodeId string) error
-	Open(ctx context.Context, nodeId string, headers map[string]string) (io.ReadCloser, error)
+	Open(ctx context.Context, node *Node, headers map[string]string) (io.ReadCloser, error)
 
 	// CreateFile puts a file to aliyun drive.
 	//
@@ -642,17 +642,43 @@ func (drive *Drive) getDownloadUrl(ctx context.Context, nodeId string) (*Downloa
 	return &detail, nil
 }
 
-func (drive *Drive) Open(ctx context.Context, nodeId string, headers map[string]string) (io.ReadCloser, error) {
-	if err := drive.checkRoot(nodeId); err != nil {
-		return nil, err
+func (drive *Drive) needUpdateNodeDownloadUrl(node *Node) bool {
+	downloadUrl := node.downloadUrl
+	if downloadUrl == nil {
+		return true
 	}
 
-	downloadUrl, err := drive.getDownloadUrl(ctx, nodeId)
+	expiration := downloadUrl.Expiration
+	expirationTime, err := time.Parse(time.RFC3339Nano, expiration)
 	if err != nil {
-		return nil, err
+		return true
 	}
 
-	url := downloadUrl.Url
+	return expirationTime.Before(time.Now())
+}
+
+func (drive *Drive) Open(ctx context.Context, node *Node, headers map[string]string) (io.ReadCloser, error) {
+	if node == nil {
+		return nil, errors.New("node is nil")
+	}
+
+	if node.Type == FolderKind {
+		return nil, errors.New("can't open folder")
+	}
+
+	drive.mutex.Lock()
+	defer drive.mutex.Unlock()
+
+	if drive.needUpdateNodeDownloadUrl(node) {
+		var err error
+		node.downloadUrl, err = drive.getDownloadUrl(ctx, node.NodeId)
+		if err != nil {
+			return nil, errors.Wrap(err, "Open")
+		}
+	}
+
+	downloadUrl := node.downloadUrl
+	url := node.downloadUrl.Url
 	if drive.config.UseInternalUrl {
 		url = downloadUrl.InternalUrl
 	}
@@ -691,13 +717,13 @@ func (drive *Drive) Open(ctx context.Context, nodeId string, headers map[string]
 
 		err := zw.Close()
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return nil, errors.Wrap(err, "Open")
 		}
 
 		return io.NopCloser(&buf), nil
 	}
 
-	return nil, errors.Errorf(`failed to open "%s"`, nodeId)
+	return nil, errors.Errorf(`failed to open "%s"`, node.NodeId)
 }
 
 func CalcSha1(in *os.File) (*os.File, string, error) {

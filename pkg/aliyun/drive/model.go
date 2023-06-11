@@ -10,7 +10,7 @@ type NodeId struct {
 }
 
 type Node struct {
-	DownloadUrl string `json:"download_url,omitempty"`
+	Url         string `json:"url,omitempty"`
 	Type        string `json:"type"`                   // folder | file
 	Hash        string `json:"content_hash,omitempty"` // sha1
 	Name        string `json:"name"`
@@ -19,6 +19,7 @@ type Node struct {
 	Size        int64  `json:"size,omitempty"`
 	Updated     string `json:"updated_at"`
 	Meta        string `json:"meta,omitempty"`
+	downloadUrl *DownloadUrl
 }
 
 func (n Node) String() string {
@@ -75,6 +76,7 @@ type DownloadUrl struct {
 	StreamsUrl  map[string]string `json:"streams_url,omitempty"`
 	Url         string            `json:"url"`
 	InternalUrl string            `json:"internal_url"`
+	Expiration  string            `json:"expiration"` // 2006-01-02T15:04:05.999Z
 }
 
 type SharedFile struct {

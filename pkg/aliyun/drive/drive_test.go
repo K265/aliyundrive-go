@@ -77,7 +77,9 @@ func TestIntegration(t *testing.T) {
 
 		nodeId, err = fs.Move(ctx, nodeId, childNodeId, "rapid_upload.2.js")
 		require.NoError(t, err)
-		file, err := fs.Open(ctx, nodeId, map[string]string{})
+		node, err = fs.Get(ctx, nodeId)
+		require.NoError(t, err)
+		file, err := fs.Open(ctx, node, map[string]string{})
 		require.NoError(t, err)
 		data, err := ioutil.ReadAll(file)
 		require.NoError(t, err)
